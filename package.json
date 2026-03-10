@@ -54,7 +54,7 @@
     "on-headers": "^1.0.2"
   },
   "peerDependencies": {
-    "mongodb": ">=7.0.0"
+    "mongodb": ">=5"
   },
   "peerDependenciesMeta": {
     "mongodb": {
@@ -89,6 +89,6 @@
     "vitest": "^3.1.1"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=18"
   }
 }

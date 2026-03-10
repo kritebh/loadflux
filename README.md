@@ -2,7 +2,7 @@
 
 Lightweight, embeddable server monitoring dashboard for Node.js. Drop a single middleware into your Express or Fastify app and get a full Grafana-like dashboard no separate process, no external services.
 
-![Dashboard](screenshots/dashboard.png)
+![Dashboard](https://raw.githubusercontent.com/kritebh/loadflux/refs/heads/main/screenshots/dashboard.png)
 
 ## Features
 
@@ -61,6 +61,12 @@ await app.listen({ port: 3000 });
 // Dashboard at http://localhost:3000/monitor
 ```
 
+## Documentation
+
+For detailed guides, all dashboard pages, configuration reference, and more — visit the full docs:
+
+**[loadflux.dev](https://loadflux.kritebh.dev)**
+
 ## Configuration
 
 ```typescript
@@ -106,12 +112,6 @@ You can also configure auth via environment variables:
 LOADFLUX_USERNAME=admin
 LOADFLUX_PASSWORD=secret
 ```
-
-## Documentation
-
-For detailed guides, all dashboard pages, configuration reference, and more — visit the full docs:
-
-**[loadflux.dev](https://loadflux.kritebh.dev)**
 
 ## Requirements
 

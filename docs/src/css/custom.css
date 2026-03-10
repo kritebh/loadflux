@@ -1,0 +1,50 @@
+:root {
+  --ifm-color-primary: #3b82f6; /* 3b82f6, 2563eb, 1d4ed8, 1e40af */
+  --ifm-color-primary-dark: #2563eb;
+  --ifm-color-primary-darker: #1d4ed8;
+  --ifm-color-primary-darkest: #1e40af;
+  --ifm-color-primary-light: #60a5fa; /* 60a5fa, 93bbfd, bfdbfe */
+  --ifm-color-primary-lighter: #93bbfd;
+  --ifm-color-primary-lightest: #bfdbfe;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #60a5fa;
+  --ifm-color-primary-dark: #3b82f6;
+  --ifm-color-primary-darker: #2563eb;
+  --ifm-color-primary-darkest: #1d4ed8;
+  --ifm-color-primary-light: #93bbfd;
+  --ifm-color-primary-lighter: #bfdbfe;
+  --ifm-color-primary-lightest: #dbeafe;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Light + dark hero tweaks: keep the vivid blue hero but add subtle focus */
+.hero.hero--primary {
+  background: radial-gradient(circle at top, #3b82f6 0, #2563eb 45%, #3c66d8 100%);
+}
+
+.hero.hero--primary .hero__title,
+.hero.hero--primary .hero__subtitle {
+  color: #ffffff;
+}
+
+/* Dark theme hero tweaks: make homepage hero vibrant and focused */
+[data-theme="dark"] .hero.hero--primary {
+  background: radial-gradient(circle at top, #1e293b 0, #020617 55%);
+}
+
+[data-theme="dark"] .hero.hero--primary .button.button--secondary {
+  background: #3b82f6;
+  color: #f9fafb;
+  border: none;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.75);
+}
+
+[data-theme="dark"] .hero.hero--primary .button.button--secondary:hover {
+  background: #2563eb;
+  color: #f9fafb;
+}
+

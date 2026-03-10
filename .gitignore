@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-ui/
+*.db
+.env
+.DS_Store
+*.log
+docs/.docusaurus/
+docs/build/
+docs/node_modules/

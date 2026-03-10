@@ -1,0 +1,94 @@
+{
+  "name": "loadflux",
+  "version": "1.0.0",
+  "description": "Lightweight server monitoring dashboard for Node.js - embed Grafana like metrics in your existing server",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-ui"
+  ],
+  "scripts": {
+    "build": "npm run build:server && npm run build:ui",
+    "build:server": "tsup",
+    "build:ui": "vite build",
+    "dev": "tsup --watch",
+    "dev:ui": "vite dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build",
+    "docs:dev": "cd docs && npm start",
+    "docs:build": "cd docs && npm run build"
+  },
+  "keywords": [
+    "monitoring",
+    "dashboard",
+    "metrics",
+    "apm",
+    "performance",
+    "express",
+    "fastify",
+    "nestjs",
+    "server-monitoring",
+    "api-monitoring",
+    "nodejs",
+    "status",
+    "charts",
+    "observability",
+    "monitoring-page"
+  ],
+  "author": "Kritebh Lagan Bibhakar",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "better-sqlite3": "^11.9.1",
+    "node-cron": "^3.0.3",
+    "on-headers": "^1.0.2"
+  },
+  "peerDependencies": {
+    "mongodb": ">=7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "mongodb": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.15.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/on-headers": "^1.0.3",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "autoprefixer": "^10.4.21",
+    "chart.js": "^4.5.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "fastify": "^5.8.1",
+    "mongodb": "^7.1.0",
+    "postcss": "^8.5.3",
+    "react": "^19.1.0",
+    "react-chartjs-2": "^5.3.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.5.0",
+    "tailwindcss": "^3.4.17",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.2",
+    "vitest": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

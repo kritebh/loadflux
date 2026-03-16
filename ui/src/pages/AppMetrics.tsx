@@ -5,11 +5,31 @@ import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { TimeSeriesChart } from "../components/charts/TimeSeriesChart";
 import { StatCard } from "../components/cards/StatCard";
 
-function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function formatTimeLabel(ts: number, rangeMs: number): string {
+  const d = new Date(ts);
+  const DAY = 24 * 60 * 60 * 1000;
+  if (rangeMs <= DAY) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  if (rangeMs <= 7 * DAY) {
+    return (
+      d.toLocaleDateString([], { month: "short", day: "numeric" }) +
+      " " +
+      d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    );
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function downsample<T>(data: T[], maxPoints = 500): T[] {
+  if (data.length <= maxPoints) return data;
+  const step = data.length / maxPoints;
+  const result: T[] = [];
+  for (let i = 0; i < maxPoints; i++) {
+    result.push(data[Math.floor(i * step)]);
+  }
+  result[result.length - 1] = data[data.length - 1];
+  return result;
 }
 
 function formatBytes(bytes: number): string {
@@ -44,7 +64,8 @@ export function AppMetrics() {
   }
 
   const metrics = data ?? [];
-  const labels = metrics.map((m) => formatTime(m.timestamp));
+  const sampled = downsample(metrics);
+  const labels = sampled.map((m) => formatTimeLabel(m.timestamp, rangeMs));
   const latest = metrics[metrics.length - 1];
 
   return (
@@ -92,13 +113,13 @@ export function AppMetrics() {
             datasets={[
               {
                 label: "Heap Used",
-                data: metrics.map((m) => m.heap_used / (1024 * 1024)),
+                data: sampled.map((m) => m.heap_used / (1024 * 1024)),
                 color: "#06b6d4",
                 fill: true,
               },
               {
                 label: "Heap Total",
-                data: metrics.map((m) => m.heap_total / (1024 * 1024)),
+                data: sampled.map((m) => m.heap_total / (1024 * 1024)),
                 color: "#6b728080",
               },
             ]}
@@ -116,12 +137,12 @@ export function AppMetrics() {
             datasets={[
               {
                 label: "Avg",
-                data: metrics.map((m) => m.event_loop_avg_ms),
+                data: sampled.map((m) => m.event_loop_avg_ms),
                 color: "#10b981",
               },
               {
                 label: "Max",
-                data: metrics.map((m) => m.event_loop_max_ms),
+                data: sampled.map((m) => m.event_loop_max_ms),
                 color: "#ef4444",
               },
             ]}
@@ -139,7 +160,7 @@ export function AppMetrics() {
             datasets={[
               {
                 label: "GC Pause",
-                data: metrics.map((m) => m.gc_pause_ms),
+                data: sampled.map((m) => m.gc_pause_ms),
                 color: "#f59e0b",
                 fill: true,
               },
@@ -158,7 +179,7 @@ export function AppMetrics() {
             datasets={[
               {
                 label: "External",
-                data: metrics.map((m) => m.external_mem / (1024 * 1024)),
+                data: sampled.map((m) => m.external_mem / (1024 * 1024)),
                 color: "#8b5cf6",
                 fill: true,
               },

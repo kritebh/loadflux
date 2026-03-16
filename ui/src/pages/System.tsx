@@ -3,9 +3,31 @@ import { useTimeRange, usePolledData } from "../hooks/useMetrics";
 import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { TimeSeriesChart } from "../components/charts/TimeSeriesChart";
 
-function formatTime(ts: number): string {
+function formatTimeLabel(ts: number, rangeMs: number): string {
   const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const DAY = 24 * 60 * 60 * 1000;
+  if (rangeMs <= DAY) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  if (rangeMs <= 7 * DAY) {
+    return (
+      d.toLocaleDateString([], { month: "short", day: "numeric" }) +
+      " " +
+      d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    );
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function downsample<T>(data: T[], maxPoints = 500): T[] {
+  if (data.length <= maxPoints) return data;
+  const step = data.length / maxPoints;
+  const result: T[] = [];
+  for (let i = 0; i < maxPoints; i++) {
+    result.push(data[Math.floor(i * step)]);
+  }
+  result[result.length - 1] = data[data.length - 1];
+  return result;
 }
 
 function formatBytes(bytes: number): string {
@@ -29,7 +51,8 @@ export function System() {
   }
 
   const metrics = data ?? [];
-  const labels = metrics.map((m) => formatTime(m.timestamp));
+  const sampled = downsample(metrics);
+  const labels = sampled.map((m) => formatTimeLabel(m.timestamp, rangeMs));
 
   return (
     <div className="space-y-6">
@@ -49,7 +72,7 @@ export function System() {
             datasets={[
               {
                 label: "CPU %",
-                data: metrics.map((m) => m.cpu_percent),
+                data: sampled.map((m) => m.cpu_percent),
                 color: "#3b82f6",
                 fill: true,
               },
@@ -69,13 +92,13 @@ export function System() {
             datasets={[
               {
                 label: "Used",
-                data: metrics.map((m) => m.mem_used / (1024 * 1024 * 1024)),
+                data: sampled.map((m) => m.mem_used / (1024 * 1024 * 1024)),
                 color: "#8b5cf6",
                 fill: true,
               },
               {
                 label: "Total",
-                data: metrics.map((m) => m.mem_total / (1024 * 1024 * 1024)),
+                data: sampled.map((m) => m.mem_total / (1024 * 1024 * 1024)),
                 color: "#6b728080",
               },
             ]}
@@ -88,13 +111,13 @@ export function System() {
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-4">
             Disk Usage
           </h3>
-          {metrics.some((m) => m.disk_percent !== null) ? (
+          {sampled.some((m) => m.disk_percent !== null) ? (
             <TimeSeriesChart
               labels={labels}
               datasets={[
                 {
                   label: "Disk %",
-                  data: metrics.map((m) => m.disk_percent ?? 0),
+                  data: sampled.map((m) => m.disk_percent ?? 0),
                   color: "#f59e0b",
                   fill: true,
                 },
@@ -114,19 +137,19 @@ export function System() {
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-4">
             Network I/O
           </h3>
-          {metrics.some((m) => m.net_rx_bytes > 0 || m.net_tx_bytes > 0) ? (
+          {sampled.some((m) => m.net_rx_bytes > 0 || m.net_tx_bytes > 0) ? (
             <>
               <TimeSeriesChart
                 labels={labels}
                 datasets={[
                   {
                     label: "RX",
-                    data: metrics.map((m) => m.net_rx_bytes / 1024),
+                    data: sampled.map((m) => m.net_rx_bytes / 1024),
                     color: "#10b981",
                   },
                   {
                     label: "TX",
-                    data: metrics.map((m) => m.net_tx_bytes / 1024),
+                    data: sampled.map((m) => m.net_tx_bytes / 1024),
                     color: "#ef4444",
                   },
                 ]}

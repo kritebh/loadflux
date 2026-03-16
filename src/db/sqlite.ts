@@ -10,6 +10,8 @@ import type {
   TopEndpointRow,
   StatusDistribution,
   OverviewMetrics,
+  PaginationParams,
+  PaginatedResult,
 } from "../types.js";
 import {
   TABLE_SYSTEM_METRICS,
@@ -20,6 +22,7 @@ import {
   TABLE_AUTH,
   SCHEMA_VERSION_KEY,
   withRpsRpm,
+  buildPaginatedResult,
 } from "./constants.js";
 import { logDbError } from "./utils.js";
 
@@ -252,6 +255,34 @@ export class SQLiteAdapter implements DatabaseAdapter {
       deleteErrorOlder: this.db.prepare(
         `DELETE FROM ${TABLE_ERROR_LOG} WHERE timestamp < ?`,
       ),
+
+      // Count statements for pagination
+      countSystem: this.db.prepare(
+        `SELECT COUNT(*) as count FROM ${TABLE_SYSTEM_METRICS} WHERE timestamp BETWEEN ? AND ?`,
+      ),
+      countProcess: this.db.prepare(
+        `SELECT COUNT(*) as count FROM ${TABLE_PROCESS_METRICS} WHERE timestamp BETWEEN ? AND ?`,
+      ),
+      countEndpoints: this.db.prepare(
+        `SELECT COUNT(*) as count FROM ${TABLE_ENDPOINT_METRICS} WHERE timestamp BETWEEN ? AND ?`,
+      ),
+      countErrors: this.db.prepare(
+        `SELECT COUNT(*) as count FROM ${TABLE_ERROR_LOG} WHERE timestamp BETWEEN ? AND ?`,
+      ),
+
+      // Paginated data statements
+      getSystemPaginated: this.db.prepare(
+        `SELECT * FROM ${TABLE_SYSTEM_METRICS} WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC LIMIT ? OFFSET ?`,
+      ),
+      getProcessPaginated: this.db.prepare(
+        `SELECT * FROM ${TABLE_PROCESS_METRICS} WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC LIMIT ? OFFSET ?`,
+      ),
+      getEndpointsPaginated: this.db.prepare(
+        `SELECT * FROM ${TABLE_ENDPOINT_METRICS} WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC LIMIT ? OFFSET ?`,
+      ),
+      getErrorsPaginated: this.db.prepare(
+        `SELECT * FROM ${TABLE_ERROR_LOG} WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
+      ),
     };
   }
 
@@ -458,6 +489,79 @@ export class SQLiteAdapter implements DatabaseAdapter {
       p99_duration: number;
     };
     return withRpsRpm(range, row);
+  }
+
+  // ─── Paginated Queries ──────────────────────────────────────────────────
+
+  async getSystemMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<SystemMetricRow>> {
+    const { count } = this.stmts.countSystem.get(range.from, range.to) as { count: number };
+    const offset = (pagination.page - 1) * pagination.limit;
+    const data = this.stmts.getSystemPaginated.all(
+      range.from, range.to, pagination.limit, offset,
+    ) as SystemMetricRow[];
+    return buildPaginatedResult(data, count, pagination);
+  }
+
+  async getProcessMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<ProcessMetricRow>> {
+    const { count } = this.stmts.countProcess.get(range.from, range.to) as { count: number };
+    const offset = (pagination.page - 1) * pagination.limit;
+    const data = this.stmts.getProcessPaginated.all(
+      range.from, range.to, pagination.limit, offset,
+    ) as ProcessMetricRow[];
+    return buildPaginatedResult(data, count, pagination);
+  }
+
+  async getEndpointMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<EndpointMetricRow>> {
+    const { count } = this.stmts.countEndpoints.get(range.from, range.to) as { count: number };
+    const offset = (pagination.page - 1) * pagination.limit;
+    const data = this.stmts.getEndpointsPaginated.all(
+      range.from, range.to, pagination.limit, offset,
+    ) as EndpointMetricRow[];
+    return buildPaginatedResult(data, count, pagination);
+  }
+
+  async getSlowRequestsPaginated(
+    thresholdMs: number,
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<EndpointMetricRow>> {
+    const countSql = `
+      SELECT COUNT(*) as count FROM ${TABLE_ENDPOINT_METRICS}
+      WHERE timestamp BETWEEN ? AND ? AND avg_duration > ?
+    `;
+    const { count } = this.db.prepare(countSql).get(range.from, range.to, thresholdMs) as { count: number };
+    const offset = (pagination.page - 1) * pagination.limit;
+    const dataSql = `
+      SELECT * FROM ${TABLE_ENDPOINT_METRICS}
+      WHERE timestamp BETWEEN ? AND ? AND avg_duration > ?
+      ORDER BY avg_duration DESC
+      LIMIT ? OFFSET ?
+    `;
+    const data = this.db.prepare(dataSql).all(
+      range.from, range.to, thresholdMs, pagination.limit, offset,
+    ) as EndpointMetricRow[];
+    return buildPaginatedResult(data, count, pagination);
+  }
+
+  async getErrorLogPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<ErrorLogRow>> {
+    const { count } = this.stmts.countErrors.get(range.from, range.to) as { count: number };
+    const offset = (pagination.page - 1) * pagination.limit;
+    const data = this.stmts.getErrorsPaginated.all(
+      range.from, range.to, pagination.limit, offset,
+    ) as ErrorLogRow[];
+    return buildPaginatedResult(data, count, pagination);
   }
 
   // ─── Maintenance ────────────────────────────────────────────────────────

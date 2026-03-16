@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
-  fetchErrors,
+  fetchErrorsPaginated,
   fetchStatusDistribution,
   type ErrorLogRow,
+  type PaginatedResponse,
 } from "../api/client";
 import { useTimeRange, usePolledData } from "../hooks/useMetrics";
 import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { DoughnutChart } from "../components/charts/DoughnutChart";
 import { MetricsTable } from "../components/tables/MetricsTable";
 import { StatCard } from "../components/cards/StatCard";
+import { Pagination } from "../components/Pagination";
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleString([], {
@@ -20,13 +22,63 @@ function formatTime(ts: number): string {
   });
 }
 
+function usePaginatedPolledData<T>(
+  fetcher: (from: number, to: number, page: number, limit: number) => Promise<PaginatedResponse<T>>,
+  rangeMs: number,
+  page: number,
+  limit = 200,
+  intervalMs = 10000,
+) {
+  const [data, setData] = useState<PaginatedResponse<T> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const now = Date.now();
+      const result = await fetcher(now - rangeMs, now, page, limit);
+      setData(result);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AuthError") throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [fetcher, rangeMs, page, limit]);
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, intervalMs);
+    return () => clearInterval(id);
+  }, [refresh, intervalMs]);
+
+  return { data, loading, refresh };
+}
+
 export function Errors() {
   const { rangeMs, setRangeMs } = useTimeRange();
-  const { data: errors } = usePolledData(fetchErrors, rangeMs);
-  const { data: distribution } = usePolledData(fetchStatusDistribution, rangeMs);
+  const [errorPage, setErrorPage] = useState(1);
+  const [errorLimit, setErrorLimit] = useState(200);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  const errorList = errors ?? [];
+  // Reset page when time range changes
+  useEffect(() => {
+    setErrorPage(1);
+  }, [rangeMs]);
+
+  const handleErrorLimitChange = useCallback((newLimit: number) => {
+    setErrorLimit(newLimit);
+    setErrorPage(1);
+  }, []);
+
+  const { data: errorsPaginated } = usePaginatedPolledData(
+    fetchErrorsPaginated,
+    rangeMs,
+    errorPage,
+    errorLimit,
+  );
+  const { data: distribution } = usePolledData(fetchStatusDistribution, rangeMs);
+
+  const errorList = errorsPaginated?.data ?? [];
+  const totalErrors = errorsPaginated?.pagination?.total ?? 0;
   const dist = distribution ?? { status_2xx: 0, status_3xx: 0, status_4xx: 0, status_5xx: 0 };
   const total = dist.status_2xx + dist.status_3xx + dist.status_4xx + dist.status_5xx;
 
@@ -41,7 +93,7 @@ export function Errors() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Total Errors"
-          value={errorList.length.toLocaleString()}
+          value={totalErrors.toLocaleString()}
           color="red"
         />
         <StatCard
@@ -132,7 +184,7 @@ export function Errors() {
                 ),
               },
             ]}
-            data={errorList.slice(0, 50)}
+            data={errorList}
             keyExtractor={(r, i) => `${r.timestamp}:${r.path}:${i}`}
             emptyMessage="No errors recorded"
           />
@@ -146,6 +198,17 @@ export function Errors() {
                   "No stack trace available"}
               </pre>
             </div>
+          )}
+
+          {errorsPaginated?.pagination && (
+            <Pagination
+              page={errorsPaginated.pagination.page}
+              totalPages={errorsPaginated.pagination.totalPages}
+              total={errorsPaginated.pagination.total}
+              limit={errorLimit}
+              onPageChange={setErrorPage}
+              onLimitChange={handleErrorLimitChange}
+            />
           )}
         </div>
       </div>

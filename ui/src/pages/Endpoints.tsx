@@ -1,15 +1,17 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   fetchTopEndpoints,
-  fetchSlowRequests,
-  fetchEndpointMetrics,
+  fetchEndpointMetricsPaginated,
+  fetchSlowRequestsPaginated,
   type TopEndpointRow,
   type EndpointMetricRow,
+  type PaginatedResponse,
 } from "../api/client";
 import { useTimeRange, usePolledData } from "../hooks/useMetrics";
 import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { BarChart } from "../components/charts/BarChart";
 import { MetricsTable } from "../components/tables/MetricsTable";
+import { Pagination } from "../components/Pagination";
 
 function formatDuration(ms: number): string {
   if (ms < 1) return `${(ms * 1000).toFixed(0)}us`;
@@ -17,21 +19,102 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
+function formatDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function usePaginatedPolledData<T>(
+  fetcher: (
+    from: number,
+    to: number,
+    page: number,
+    limit: number,
+  ) => Promise<PaginatedResponse<T>>,
+  rangeMs: number,
+  page: number,
+  limit = 200,
+  intervalMs = 10000,
+) {
+  const [data, setData] = useState<PaginatedResponse<T> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const now = Date.now();
+      const result = await fetcher(now - rangeMs, now, page, limit);
+      setData(result);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AuthError") throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [fetcher, rangeMs, page, limit]);
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, intervalMs);
+    return () => clearInterval(id);
+  }, [refresh, intervalMs]);
+
+  return { data, loading, refresh };
+}
+
 export function Endpoints() {
   const { rangeMs, setRangeMs } = useTimeRange();
   const [topMetric, setTopMetric] = useState<string>("request_count");
+  const [endpointsPage, setEndpointsPage] = useState(1);
+  const [endpointsLimit, setEndpointsLimit] = useState(200);
+  const [slowPage, setSlowPage] = useState(1);
+  const [slowLimit, setSlowLimit] = useState(20);
+
+  // Reset pages when time range changes
+  useEffect(() => {
+    setEndpointsPage(1);
+    setSlowPage(1);
+  }, [rangeMs]);
+
+  const handleEndpointsLimitChange = useCallback((newLimit: number) => {
+    setEndpointsLimit(newLimit);
+    setEndpointsPage(1);
+  }, []);
+
+  const handleSlowLimitChange = useCallback((newLimit: number) => {
+    setSlowLimit(newLimit);
+    setSlowPage(1);
+  }, []);
 
   const topFetcher = useCallback(
     (from: number, to: number) => fetchTopEndpoints(topMetric, from, to),
-    [topMetric]
+    [topMetric],
   );
-  const { data: topData } = usePolledData<TopEndpointRow[]>(topFetcher, rangeMs);
-  const { data: slowData } = usePolledData(fetchSlowRequests, rangeMs);
-  const { data: allEndpoints } = usePolledData(fetchEndpointMetrics, rangeMs);
+  const { data: topData } = usePolledData<TopEndpointRow[]>(
+    topFetcher,
+    rangeMs,
+  );
+
+  const { data: endpointsPaginated } = usePaginatedPolledData(
+    fetchEndpointMetricsPaginated,
+    rangeMs,
+    endpointsPage,
+    endpointsLimit,
+  );
+
+  const { data: slowPaginated } = usePaginatedPolledData(
+    fetchSlowRequestsPaginated,
+    rangeMs,
+    slowPage,
+    slowLimit,
+  );
 
   const top = topData ?? [];
-  const slow = slowData ?? [];
-  const endpoints = allEndpoints ?? [];
+  const endpoints = endpointsPaginated?.data ?? [];
+  const slow = slowPaginated?.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -80,6 +163,11 @@ export function Endpoints() {
         </h3>
         <MetricsTable<EndpointMetricRow>
           columns={[
+            {
+              key: "Time",
+              header: "Time",
+              render: (r) => formatDate(r.timestamp),
+            },
             { key: "method", header: "Method" },
             { key: "path", header: "Path" },
             {
@@ -107,10 +195,20 @@ export function Endpoints() {
               render: (r) => r.request_count.toLocaleString(),
             },
           ]}
-          data={slow.slice(0, 20)}
+          data={slow}
           keyExtractor={(r, i) => `${r.method}:${r.path}:${i}`}
           emptyMessage="No slow requests"
         />
+        {slowPaginated?.pagination && (
+          <Pagination
+            page={slowPaginated.pagination.page}
+            totalPages={slowPaginated.pagination.totalPages}
+            total={slowPaginated.pagination.total}
+            limit={slowLimit}
+            onPageChange={setSlowPage}
+            onLimitChange={handleSlowLimitChange}
+          />
+        )}
       </div>
 
       {/* All endpoints table */}
@@ -120,6 +218,11 @@ export function Endpoints() {
         </h3>
         <MetricsTable<EndpointMetricRow>
           columns={[
+            {
+              key: "Time",
+              header: "Time",
+              render: (r) => formatDate(r.timestamp),
+            },
             { key: "method", header: "Method" },
             { key: "path", header: "Path" },
             {
@@ -137,6 +240,18 @@ export function Endpoints() {
                   {r.error_count}
                 </span>
               ),
+            },
+            {
+              key: "total_duration",
+              header: "Total Duration",
+              align: "right",
+              render: (r) => formatDuration(r.total_duration),
+            },
+            {
+              key: "total_res_bytes",
+              header: "Res Bytes",
+              align: "right",
+              render: (r) => r.total_res_bytes.toLocaleString(),
             },
             {
               key: "avg_duration",
@@ -174,6 +289,16 @@ export function Endpoints() {
           keyExtractor={(r, i) => `${r.method}:${r.path}:${r.timestamp}:${i}`}
           emptyMessage="No endpoint data yet"
         />
+        {endpointsPaginated?.pagination && (
+          <Pagination
+            page={endpointsPaginated.pagination.page}
+            totalPages={endpointsPaginated.pagination.totalPages}
+            total={endpointsPaginated.pagination.total}
+            limit={endpointsLimit}
+            onPageChange={setEndpointsPage}
+            onLimitChange={handleEndpointsLimitChange}
+          />
+        )}
       </div>
     </div>
   );

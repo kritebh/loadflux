@@ -137,6 +137,25 @@ export interface ErrorLogRow {
   duration_ms: number;
 }
 
+// ─── Pagination ─────────────────────────────────────────────────────────────
+
+export interface PaginationParams {
+  page: number;
+  limit: number;
+}
+
+export interface PaginatedResult<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
 // ─── Query types ────────────────────────────────────────────────────────────
 
 export interface TimeRange {
@@ -203,6 +222,29 @@ export interface DatabaseAdapter {
   getErrorLog(range: TimeRange): Promise<ErrorLogRow[]>;
   getStatusDistribution(range: TimeRange): Promise<StatusDistribution>;
   getOverview(range: TimeRange): Promise<OverviewMetrics>;
+
+  // Paginated queries
+  getSystemMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams
+  ): Promise<PaginatedResult<SystemMetricRow>>;
+  getProcessMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams
+  ): Promise<PaginatedResult<ProcessMetricRow>>;
+  getEndpointMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams
+  ): Promise<PaginatedResult<EndpointMetricRow>>;
+  getSlowRequestsPaginated(
+    thresholdMs: number,
+    range: TimeRange,
+    pagination: PaginationParams
+  ): Promise<PaginatedResult<EndpointMetricRow>>;
+  getErrorLogPaginated(
+    range: TimeRange,
+    pagination: PaginationParams
+  ): Promise<PaginatedResult<ErrorLogRow>>;
 
   // Maintenance
   deleteOlderThan(timestamp: number): void;

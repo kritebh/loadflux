@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import type { MiddlewareContext } from "../middleware/types.js";
-import type { TimeRange, TopEndpointMetric } from "../types.js";
+import type { TimeRange, TopEndpointMetric, PaginationParams } from "../types.js";
 import { isAuthenticated } from "../auth/middleware.js";
 import {
   hashPassword,
@@ -31,6 +31,14 @@ function parseTimeRange(query: URLSearchParams): TimeRange {
   const from = parseInt(query.get("from") ?? "") || now - 60 * 60 * 1000; // default 1 hour
   const to = parseInt(query.get("to") ?? "") || now;
   return { from, to };
+}
+
+function parsePagination(query: URLSearchParams): PaginationParams | null {
+  const pageStr = query.get("page");
+  if (pageStr === null) return null;
+  const page = Math.max(parseInt(pageStr, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(query.get("limit") ?? "200", 10) || 200, 1), 1000);
+  return { page, limit };
 }
 
 async function readBody(req: IncomingMessage): Promise<any> {
@@ -210,14 +218,29 @@ export function createApiHandler(ctx: MiddlewareContext) {
       // Routes
       switch (apiPath) {
         case "/system": {
+          const pg = parsePagination(query);
+          if (pg) {
+            const result = await db.getSystemMetricsPaginated(range, pg);
+            return json(res, result);
+          }
           const data = await db.getSystemMetrics(range);
           return json(res, data);
         }
         case "/process": {
+          const pg = parsePagination(query);
+          if (pg) {
+            const result = await db.getProcessMetricsPaginated(range, pg);
+            return json(res, result);
+          }
           const data = await db.getProcessMetrics(range);
           return json(res, data);
         }
         case "/endpoints": {
+          const pg = parsePagination(query);
+          if (pg) {
+            const result = await db.getEndpointMetricsPaginated(range, pg);
+            return json(res, result);
+          }
           const data = await db.getEndpointMetrics(range);
           return json(res, data);
         }
@@ -231,10 +254,20 @@ export function createApiHandler(ctx: MiddlewareContext) {
           const threshold =
             parseInt(query.get("threshold") ?? "") ||
             config.slowRequestThreshold;
+          const pg = parsePagination(query);
+          if (pg) {
+            const result = await db.getSlowRequestsPaginated(threshold, range, pg);
+            return json(res, result);
+          }
           const data = await db.getSlowRequests(threshold, range);
           return json(res, data);
         }
         case "/errors": {
+          const pg = parsePagination(query);
+          if (pg) {
+            const result = await db.getErrorLogPaginated(range, pg);
+            return json(res, result);
+          }
           const data = await db.getErrorLog(range);
           return json(res, data);
         }

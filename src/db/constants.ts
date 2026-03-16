@@ -1,4 +1,10 @@
-import type { OverviewMetrics, StatusDistribution, TimeRange } from "../types.js";
+import type {
+  OverviewMetrics,
+  PaginatedResult,
+  PaginationParams,
+  StatusDistribution,
+  TimeRange,
+} from "../types.js";
 
 // Shared collection / table names for all database adapters
 export const TABLE_SYSTEM_METRICS = "loadflux_system_metrics";
@@ -26,6 +32,25 @@ export const EMPTY_OVERVIEW_BASE: Omit<OverviewMetrics, "rps" | "rpm"> = {
   p95_duration: 0,
   p99_duration: 0,
 };
+
+export function buildPaginatedResult<T>(
+  data: T[],
+  total: number,
+  pagination: PaginationParams,
+): PaginatedResult<T> {
+  const totalPages = Math.max(Math.ceil(total / pagination.limit), 1);
+  return {
+    data,
+    pagination: {
+      page: pagination.page,
+      limit: pagination.limit,
+      total,
+      totalPages,
+      hasNext: pagination.page < totalPages,
+      hasPrev: pagination.page > 1,
+    },
+  };
+}
 
 export function withRpsRpm<T extends { total_requests: number }>(
   range: TimeRange,

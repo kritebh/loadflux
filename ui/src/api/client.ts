@@ -161,6 +161,37 @@ export function updateSettings(settings: Partial<SettingsData>) {
   });
 }
 
+// Pagination
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+export function fetchEndpointMetricsPaginated(from: number, to: number, page: number, limit = 200) {
+  return apiFetch<PaginatedResponse<EndpointMetricRow>>(
+    `/endpoints?from=${from}&to=${to}&page=${page}&limit=${limit}`
+  );
+}
+
+export function fetchSlowRequestsPaginated(from: number, to: number, page: number, limit = 200, threshold?: number) {
+  let url = `/endpoints/slow?from=${from}&to=${to}&page=${page}&limit=${limit}`;
+  if (threshold) url += `&threshold=${threshold}`;
+  return apiFetch<PaginatedResponse<EndpointMetricRow>>(url);
+}
+
+export function fetchErrorsPaginated(from: number, to: number, page: number, limit = 200) {
+  return apiFetch<PaginatedResponse<ErrorLogRow>>(
+    `/errors?from=${from}&to=${to}&page=${page}&limit=${limit}`
+  );
+}
+
 // Types (mirrors server types)
 export interface SystemMetricRow {
   timestamp: number;

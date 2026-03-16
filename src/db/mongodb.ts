@@ -9,6 +9,8 @@ import type {
   TopEndpointRow,
   StatusDistribution,
   OverviewMetrics,
+  PaginationParams,
+  PaginatedResult,
 } from "../types.js";
 import {
   TABLE_SYSTEM_METRICS,
@@ -20,6 +22,7 @@ import {
   EMPTY_STATUS_DISTRIBUTION,
   EMPTY_OVERVIEW_BASE,
   withRpsRpm,
+  buildPaginatedResult,
 } from "./constants.js";
 import { fireAndForget } from "./utils.js";
 
@@ -336,6 +339,97 @@ export class MongoDBAdapter implements DatabaseAdapter {
     };
 
     return withRpsRpm(range, base);
+  }
+
+  // ─── Paginated Queries ──────────────────────────────────────────────────
+
+  async getSystemMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<SystemMetricRow>> {
+    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const [total, docs] = await Promise.all([
+      this.systemCol.countDocuments(filter),
+      this.systemCol
+        .find(filter)
+        .sort({ timestamp: 1 })
+        .skip((pagination.page - 1) * pagination.limit)
+        .limit(pagination.limit)
+        .toArray(),
+    ]);
+    return buildPaginatedResult(docs as unknown as SystemMetricRow[], total, pagination);
+  }
+
+  async getProcessMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<ProcessMetricRow>> {
+    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const [total, docs] = await Promise.all([
+      this.processCol.countDocuments(filter),
+      this.processCol
+        .find(filter)
+        .sort({ timestamp: 1 })
+        .skip((pagination.page - 1) * pagination.limit)
+        .limit(pagination.limit)
+        .toArray(),
+    ]);
+    return buildPaginatedResult(docs as unknown as ProcessMetricRow[], total, pagination);
+  }
+
+  async getEndpointMetricsPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<EndpointMetricRow>> {
+    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const [total, docs] = await Promise.all([
+      this.endpointCol.countDocuments(filter),
+      this.endpointCol
+        .find(filter)
+        .sort({ timestamp: 1 })
+        .skip((pagination.page - 1) * pagination.limit)
+        .limit(pagination.limit)
+        .toArray(),
+    ]);
+    return buildPaginatedResult(docs as unknown as EndpointMetricRow[], total, pagination);
+  }
+
+  async getSlowRequestsPaginated(
+    thresholdMs: number,
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<EndpointMetricRow>> {
+    const filter = {
+      timestamp: { $gte: range.from, $lte: range.to },
+      avg_duration: { $gt: thresholdMs },
+    };
+    const [total, docs] = await Promise.all([
+      this.endpointCol.countDocuments(filter),
+      this.endpointCol
+        .find(filter)
+        .sort({ avg_duration: -1 })
+        .skip((pagination.page - 1) * pagination.limit)
+        .limit(pagination.limit)
+        .toArray(),
+    ]);
+    return buildPaginatedResult(docs as unknown as EndpointMetricRow[], total, pagination);
+  }
+
+  async getErrorLogPaginated(
+    range: TimeRange,
+    pagination: PaginationParams,
+  ): Promise<PaginatedResult<ErrorLogRow>> {
+    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const [total, docs] = await Promise.all([
+      this.errorCol.countDocuments(filter),
+      this.errorCol
+        .find(filter)
+        .sort({ timestamp: -1 })
+        .skip((pagination.page - 1) * pagination.limit)
+        .limit(pagination.limit)
+        .toArray(),
+    ]);
+    return buildPaginatedResult(docs as unknown as ErrorLogRow[], total, pagination);
   }
 
   // ─── Maintenance ────────────────────────────────────────────────────────

@@ -56,6 +56,12 @@ Responses with status codes >= 400 are logged in the error log with:
 
 View these in the Errors page of the dashboard.
 
+## Dashboard search and filters
+
+On the **Endpoints** page, a search box filters top endpoints, the endpoint metrics table, and slow requests (server-side `search` query parameter).
+
+On the **Errors** page, search narrows the error log; you can also filter by **HTTP status code** for the current time range (`status` query parameter).
+
 ## Excluding routes
 
 To exclude specific routes from monitoring:

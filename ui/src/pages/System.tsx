@@ -1,46 +1,81 @@
+import { useMemo } from "react";
 import { fetchSystemMetrics } from "../api/client";
 import { useTimeRange, usePolledData } from "../hooks/useMetrics";
 import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { TimeSeriesChart } from "../components/charts/TimeSeriesChart";
+import { formatBytes, formatTimeLabel } from "../utils/format";
 
-function formatTimeLabel(ts: number, rangeMs: number): string {
-  const d = new Date(ts);
-  const DAY = 24 * 60 * 60 * 1000;
-  if (rangeMs <= DAY) {
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-  if (rangeMs <= 7 * DAY) {
-    return (
-      d.toLocaleDateString([], { month: "short", day: "numeric" }) +
-      " " +
-      d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    );
-  }
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function downsample<T>(data: T[], maxPoints = 500): T[] {
-  if (data.length <= maxPoints) return data;
-  const step = data.length / maxPoints;
-  const result: T[] = [];
-  for (let i = 0; i < maxPoints; i++) {
-    result.push(data[Math.floor(i * step)]);
-  }
-  result[result.length - 1] = data[data.length - 1];
-  return result;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
+const MAX_CHART_POINTS = 280;
 
 export function System() {
-  const { rangeMs, setRangeMs } = useTimeRange();
-  const { data, loading } = usePolledData(fetchSystemMetrics, rangeMs);
+  const {
+    range,
+    rangeSyncToken,
+    getRange,
+    setCustomRange,
+    resetToDefault,
+    isDefaultLastHour,
+  } = useTimeRange();
+  const { data, loading } = usePolledData(
+    (from, to) => fetchSystemMetrics(from, to, MAX_CHART_POINTS),
+    getRange,
+  );
+
+  const metrics = data ?? [];
+  const rangeMs = range.to - range.from;
+  const chartMetrics = metrics;
+  const labels = useMemo(
+    () => chartMetrics.map((m) => formatTimeLabel(m.timestamp, rangeMs)),
+    [chartMetrics, rangeMs],
+  );
+
+  const cpuData = useMemo(
+    () => chartMetrics.map((m) => m.cpu_percent),
+    [chartMetrics],
+  );
+  const memUsedData = useMemo(
+    () => chartMetrics.map((m) => m.mem_used / (1024 * 1024 * 1024)),
+    [chartMetrics],
+  );
+  const memTotalData = useMemo(
+    () => chartMetrics.map((m) => m.mem_total / (1024 * 1024 * 1024)),
+    [chartMetrics],
+  );
+  const diskData = useMemo(
+    () => chartMetrics.map((m) => m.disk_percent ?? 0),
+    [chartMetrics],
+  );
+  const netRxData = useMemo(
+    () => chartMetrics.map((m) => m.net_rx_bytes / 1024),
+    [chartMetrics],
+  );
+  const netTxData = useMemo(
+    () => chartMetrics.map((m) => m.net_tx_bytes / 1024),
+    [chartMetrics],
+  );
+
+  const cpuDatasets = useMemo(
+    () => [{ label: "CPU %", data: cpuData, color: "#3b82f6", fill: true }],
+    [cpuData],
+  );
+  const memDatasets = useMemo(
+    () => [
+      { label: "Used", data: memUsedData, color: "#8b5cf6", fill: true },
+      { label: "Total", data: memTotalData, color: "#6b728080" },
+    ],
+    [memUsedData, memTotalData],
+  );
+  const diskDatasets = useMemo(
+    () => [{ label: "Disk %", data: diskData, color: "#f59e0b", fill: true }],
+    [diskData],
+  );
+  const netDatasets = useMemo(
+    () => [
+      { label: "RX", data: netRxData, color: "#10b981" },
+      { label: "TX", data: netTxData, color: "#ef4444" },
+    ],
+    [netRxData, netTxData],
+  );
 
   if (loading && !data) {
     return (
@@ -50,15 +85,19 @@ export function System() {
     );
   }
 
-  const metrics = data ?? [];
-  const sampled = downsample(metrics);
-  const labels = sampled.map((m) => formatTimeLabel(m.timestamp, rangeMs));
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <h1 className="text-2xl font-bold">System Metrics</h1>
-        <TimeRangeSelector value={rangeMs} onChange={setRangeMs} />
+        <div className="shrink-0 sm:ml-auto">
+          <TimeRangeSelector
+            range={range}
+            rangeSyncToken={rangeSyncToken}
+            isDefaultLastHour={isDefaultLastHour}
+            onApply={setCustomRange}
+            onResetDefault={resetToDefault}
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -69,14 +108,7 @@ export function System() {
           </h3>
           <TimeSeriesChart
             labels={labels}
-            datasets={[
-              {
-                label: "CPU %",
-                data: sampled.map((m) => m.cpu_percent),
-                color: "#3b82f6",
-                fill: true,
-              },
-            ]}
+            datasets={cpuDatasets}
             yLabel="%"
             yMax={100}
           />
@@ -89,19 +121,7 @@ export function System() {
           </h3>
           <TimeSeriesChart
             labels={labels}
-            datasets={[
-              {
-                label: "Used",
-                data: sampled.map((m) => m.mem_used / (1024 * 1024 * 1024)),
-                color: "#8b5cf6",
-                fill: true,
-              },
-              {
-                label: "Total",
-                data: sampled.map((m) => m.mem_total / (1024 * 1024 * 1024)),
-                color: "#6b728080",
-              },
-            ]}
+            datasets={memDatasets}
             yLabel="GB"
           />
         </div>
@@ -111,17 +131,10 @@ export function System() {
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-4">
             Disk Usage
           </h3>
-          {sampled.some((m) => m.disk_percent !== null) ? (
+          {metrics.some((m) => m.disk_percent !== null) ? (
             <TimeSeriesChart
               labels={labels}
-              datasets={[
-                {
-                  label: "Disk %",
-                  data: sampled.map((m) => m.disk_percent ?? 0),
-                  color: "#f59e0b",
-                  fill: true,
-                },
-              ]}
+              datasets={diskDatasets}
               yLabel="%"
               yMax={100}
             />
@@ -137,22 +150,11 @@ export function System() {
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-4">
             Network I/O
           </h3>
-          {sampled.some((m) => m.net_rx_bytes > 0 || m.net_tx_bytes > 0) ? (
+          {metrics.some((m) => m.net_rx_bytes > 0 || m.net_tx_bytes > 0) ? (
             <>
               <TimeSeriesChart
                 labels={labels}
-                datasets={[
-                  {
-                    label: "RX",
-                    data: sampled.map((m) => m.net_rx_bytes / 1024),
-                    color: "#10b981",
-                  },
-                  {
-                    label: "TX",
-                    data: sampled.map((m) => m.net_tx_bytes / 1024),
-                    color: "#ef4444",
-                  },
-                ]}
+                datasets={netDatasets}
                 yLabel="KB"
               />
               <div className="mt-2 flex justify-between text-xs text-gray-400">

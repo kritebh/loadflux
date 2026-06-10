@@ -11,6 +11,7 @@ import type {
   OverviewMetrics,
   PaginationParams,
   PaginatedResult,
+  QueryFilter,
 } from "../types.js";
 import {
   TABLE_SYSTEM_METRICS,
@@ -25,10 +26,29 @@ import {
   buildPaginatedResult,
 } from "./constants.js";
 import { fireAndForget } from "./utils.js";
+import {
+  ensureSampleSize,
+  normalizeSearchTerm,
+  parseStatusFilter,
+  escapeRegex,
+} from "./query-helpers.js";
 
 type MongoClient = import("mongodb").MongoClient;
 type Db = import("mongodb").Db;
 type Collection = import("mongodb").Collection;
+
+function toSearchRegex(search?: string): RegExp | null {
+  const term = normalizeSearchTerm(search);
+  if (!term) return null;
+  return new RegExp(escapeRegex(term), "i");
+}
+
+function statusQuery(status?: string): number | Record<string, any> | null {
+  const filter = parseStatusFilter(status);
+  if (filter.kind === "all") return null;
+  if (filter.kind === "range") return { $gte: filter.min, $lte: filter.max };
+  return filter.code;
+}
 
 export class MongoDBAdapter implements DatabaseAdapter {
   private client!: MongoClient;
@@ -126,9 +146,70 @@ export class MongoDBAdapter implements DatabaseAdapter {
     );
   }
 
+  insertErrorsBatch(errors: ErrorLogRow[]): void {
+    if (errors.length === 0) return;
+    fireAndForget(
+      this.errorCol.insertMany(errors),
+      "MongoDB insertErrorsBatch",
+    );
+  }
+
+  insertSystemAndProcessMetrics(
+    system: SystemMetricRow,
+    process: ProcessMetricRow,
+  ): void {
+    this.insertSystemMetrics(system);
+    this.insertProcessMetrics(process);
+  }
+
   // ─── Queries ────────────────────────────────────────────────────────────
 
-  async getSystemMetrics(range: TimeRange): Promise<SystemMetricRow[]> {
+  async getSystemMetrics(
+    range: TimeRange,
+    maxPoints?: number,
+  ): Promise<SystemMetricRow[]> {
+    const sampleSize = ensureSampleSize(maxPoints);
+    if (sampleSize) {
+      const span = Math.max(range.to - range.from, 1);
+      const bucketMs = Math.max(Math.floor(span / sampleSize), 1);
+      const docs = await this.systemCol
+        .aggregate<SystemMetricRow>([
+          { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+          {
+            $group: {
+              _id: {
+                $subtract: [
+                  "$timestamp",
+                  { $mod: [{ $subtract: ["$timestamp", range.from] }, bucketMs] },
+                ],
+              },
+              timestamp: { $max: "$timestamp" },
+              cpu_percent: { $avg: "$cpu_percent" },
+              mem_total: { $avg: "$mem_total" },
+              mem_used: { $avg: "$mem_used" },
+              mem_percent: { $avg: "$mem_percent" },
+              disk_total: { $avg: "$disk_total" },
+              disk_used: { $avg: "$disk_used" },
+              disk_percent: { $avg: "$disk_percent" },
+              net_rx_bytes: { $avg: "$net_rx_bytes" },
+              net_tx_bytes: { $avg: "$net_tx_bytes" },
+            },
+          },
+          { $sort: { timestamp: 1 } },
+          { $project: { _id: 0 } },
+        ])
+        .toArray();
+      return docs.map((row) => ({
+        ...row,
+        mem_total: Math.round(row.mem_total),
+        mem_used: Math.round(row.mem_used),
+        disk_total: row.disk_total === null ? null : Math.round(row.disk_total),
+        disk_used: row.disk_used === null ? null : Math.round(row.disk_used),
+        net_rx_bytes: Math.round(row.net_rx_bytes),
+        net_tx_bytes: Math.round(row.net_tx_bytes),
+      })) as SystemMetricRow[];
+    }
+
     const docs = await this.systemCol
       .find({ timestamp: { $gte: range.from, $lte: range.to } })
       .sort({ timestamp: 1 })
@@ -136,7 +217,47 @@ export class MongoDBAdapter implements DatabaseAdapter {
     return docs as unknown as SystemMetricRow[];
   }
 
-  async getProcessMetrics(range: TimeRange): Promise<ProcessMetricRow[]> {
+  async getProcessMetrics(
+    range: TimeRange,
+    maxPoints?: number,
+  ): Promise<ProcessMetricRow[]> {
+    const sampleSize = ensureSampleSize(maxPoints);
+    if (sampleSize) {
+      const span = Math.max(range.to - range.from, 1);
+      const bucketMs = Math.max(Math.floor(span / sampleSize), 1);
+      const docs = await this.processCol
+        .aggregate<ProcessMetricRow>([
+          { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+          {
+            $group: {
+              _id: {
+                $subtract: [
+                  "$timestamp",
+                  { $mod: [{ $subtract: ["$timestamp", range.from] }, bucketMs] },
+                ],
+              },
+              timestamp: { $max: "$timestamp" },
+              heap_used: { $avg: "$heap_used" },
+              heap_total: { $avg: "$heap_total" },
+              external_mem: { $avg: "$external_mem" },
+              event_loop_avg_ms: { $avg: "$event_loop_avg_ms" },
+              event_loop_max_ms: { $avg: "$event_loop_max_ms" },
+              gc_pause_ms: { $avg: "$gc_pause_ms" },
+              uptime_seconds: { $avg: "$uptime_seconds" },
+            },
+          },
+          { $sort: { timestamp: 1 } },
+          { $project: { _id: 0 } },
+        ])
+        .toArray();
+      return docs.map((row) => ({
+        ...row,
+        heap_used: Math.round(row.heap_used),
+        heap_total: Math.round(row.heap_total),
+        external_mem: Math.round(row.external_mem),
+      })) as ProcessMetricRow[];
+    }
+
     const docs = await this.processCol
       .find({ timestamp: { $gte: range.from, $lte: range.to } })
       .sort({ timestamp: 1 })
@@ -144,9 +265,17 @@ export class MongoDBAdapter implements DatabaseAdapter {
     return docs as unknown as ProcessMetricRow[];
   }
 
-  async getEndpointMetrics(range: TimeRange): Promise<EndpointMetricRow[]> {
+  async getEndpointMetrics(
+    range: TimeRange,
+    filter?: QueryFilter,
+  ): Promise<EndpointMetricRow[]> {
+    const searchRegex = toSearchRegex(filter?.search);
+    const query: Record<string, any> = { timestamp: { $gte: range.from, $lte: range.to } };
+    if (searchRegex) {
+      query.$or = [{ method: searchRegex }, { path: searchRegex }];
+    }
     const docs = await this.endpointCol
-      .find({ timestamp: { $gte: range.from, $lte: range.to } })
+      .find(query)
       .sort({ timestamp: 1 })
       .toArray();
     return docs as unknown as EndpointMetricRow[];
@@ -156,7 +285,13 @@ export class MongoDBAdapter implements DatabaseAdapter {
     metric: TopEndpointMetric,
     limit: number,
     range: TimeRange,
+    filter?: QueryFilter,
   ): Promise<TopEndpointRow[]> {
+    const searchRegex = toSearchRegex(filter?.search);
+    const match: Record<string, any> = { timestamp: { $gte: range.from, $lte: range.to } };
+    if (searchRegex) {
+      match.$or = [{ method: searchRegex }, { path: searchRegex }];
+    }
     if (metric === "avg_duration" || metric === "error_rate") {
       const groupFields: Record<string, any> =
         metric === "avg_duration"
@@ -192,7 +327,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
 
       return this.endpointCol
         .aggregate<TopEndpointRow>([
-          { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+          { $match: match },
           {
             $group: {
               _id: { method: "$method", path: "$path" },
@@ -230,7 +365,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
 
     return this.endpointCol
       .aggregate<TopEndpointRow>([
-        { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+        { $match: match },
         {
           $group: {
             _id: { method: "$method", path: "$path" },
@@ -254,23 +389,48 @@ export class MongoDBAdapter implements DatabaseAdapter {
   async getSlowRequests(
     thresholdMs: number,
     range: TimeRange,
+    filter?: QueryFilter,
   ): Promise<EndpointMetricRow[]> {
+    const searchRegex = toSearchRegex(filter?.search);
+    const query: Record<string, any> = {
+      timestamp: { $gte: range.from, $lte: range.to },
+      avg_duration: { $gt: thresholdMs },
+    };
+    if (searchRegex) {
+      query.$or = [{ method: searchRegex }, { path: searchRegex }];
+    }
     const docs = await this.endpointCol
-      .find({
-        timestamp: { $gte: range.from, $lte: range.to },
-        avg_duration: { $gt: thresholdMs },
-      })
+      .find(query)
       .sort({ avg_duration: -1 })
       .toArray();
     return docs as unknown as EndpointMetricRow[];
   }
 
-  async getErrorLog(range: TimeRange): Promise<ErrorLogRow[]> {
+  async getErrorLog(
+    range: TimeRange,
+    filter?: QueryFilter,
+  ): Promise<ErrorLogRow[]> {
+    const searchRegex = toSearchRegex(filter?.search);
+    const status = statusQuery(filter?.status);
+    const query: Record<string, any> = { timestamp: { $gte: range.from, $lte: range.to } };
+    if (status !== null) {
+      query.status_code = status;
+    }
+    if (searchRegex) {
+      query.$or = [{ method: searchRegex }, { path: searchRegex }, { error_msg: searchRegex }];
+    }
     const docs = await this.errorCol
-      .find({ timestamp: { $gte: range.from, $lte: range.to } })
+      .find(query)
       .sort({ timestamp: -1 })
       .toArray();
     return docs as unknown as ErrorLogRow[];
+  }
+
+  async getErrorStatusCodes(range: TimeRange): Promise<number[]> {
+    const codes = await this.errorCol.distinct("status_code", {
+      timestamp: { $gte: range.from, $lte: range.to },
+    });
+    return (codes as number[]).filter((c) => typeof c === "number").sort((a, b) => a - b);
   }
 
   async getStatusDistribution(range: TimeRange): Promise<StatusDistribution> {
@@ -346,6 +506,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
   async getSystemMetricsPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    _maxPoints?: number,
   ): Promise<PaginatedResult<SystemMetricRow>> {
     const filter = { timestamp: { $gte: range.from, $lte: range.to } };
     const [total, docs] = await Promise.all([
@@ -363,6 +524,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
   async getProcessMetricsPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    _maxPoints?: number,
   ): Promise<PaginatedResult<ProcessMetricRow>> {
     const filter = { timestamp: { $gte: range.from, $lte: range.to } };
     const [total, docs] = await Promise.all([
@@ -380,12 +542,17 @@ export class MongoDBAdapter implements DatabaseAdapter {
   async getEndpointMetricsPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<EndpointMetricRow>> {
-    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const searchRegex = toSearchRegex(filter?.search);
+    const query: Record<string, any> = { timestamp: { $gte: range.from, $lte: range.to } };
+    if (searchRegex) {
+      query.$or = [{ method: searchRegex }, { path: searchRegex }];
+    }
     const [total, docs] = await Promise.all([
-      this.endpointCol.countDocuments(filter),
+      this.endpointCol.countDocuments(query),
       this.endpointCol
-        .find(filter)
+        .find(query)
         .sort({ timestamp: 1 })
         .skip((pagination.page - 1) * pagination.limit)
         .limit(pagination.limit)
@@ -398,15 +565,20 @@ export class MongoDBAdapter implements DatabaseAdapter {
     thresholdMs: number,
     range: TimeRange,
     pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<EndpointMetricRow>> {
-    const filter = {
+    const searchRegex = toSearchRegex(filter?.search);
+    const query: Record<string, any> = {
       timestamp: { $gte: range.from, $lte: range.to },
       avg_duration: { $gt: thresholdMs },
     };
+    if (searchRegex) {
+      query.$or = [{ method: searchRegex }, { path: searchRegex }];
+    }
     const [total, docs] = await Promise.all([
-      this.endpointCol.countDocuments(filter),
+      this.endpointCol.countDocuments(query),
       this.endpointCol
-        .find(filter)
+        .find(query)
         .sort({ avg_duration: -1 })
         .skip((pagination.page - 1) * pagination.limit)
         .limit(pagination.limit)
@@ -418,12 +590,21 @@ export class MongoDBAdapter implements DatabaseAdapter {
   async getErrorLogPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<ErrorLogRow>> {
-    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const searchRegex = toSearchRegex(filter?.search);
+    const status = statusQuery(filter?.status);
+    const query: Record<string, any> = { timestamp: { $gte: range.from, $lte: range.to } };
+    if (status !== null) {
+      query.status_code = status;
+    }
+    if (searchRegex) {
+      query.$or = [{ method: searchRegex }, { path: searchRegex }, { error_msg: searchRegex }];
+    }
     const [total, docs] = await Promise.all([
-      this.errorCol.countDocuments(filter),
+      this.errorCol.countDocuments(query),
       this.errorCol
-        .find(filter)
+        .find(query)
         .sort({ timestamp: -1 })
         .skip((pagination.page - 1) * pagination.limit)
         .limit(pagination.limit)
@@ -473,6 +654,11 @@ export class MongoDBAdapter implements DatabaseAdapter {
     const doc = await this.authCol.findOne({ username });
     if (!doc) return null;
     return { username: doc.username, password_hash: doc.password_hash };
+  }
+
+  async hasAnyUser(): Promise<boolean> {
+    const doc = await this.authCol.findOne({}, { projection: { _id: 1 } });
+    return doc != null;
   }
 
   createUser(username: string, passwordHash: string): void {

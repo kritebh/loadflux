@@ -4,6 +4,13 @@ import type { DatabaseAdapter } from "../types.js";
 
 // HMAC secret — generated once per startup, stored in DB for persistence
 let hmacSecret: string | null = null;
+let cachedAuthEpoch: number | null = null;
+
+/** @internal Clears in-memory auth caches (for tests). */
+export function resetAuthModuleForTests(): void {
+  hmacSecret = null;
+  cachedAuthEpoch = null;
+}
 
 async function getOrCreateSecret(db: DatabaseAdapter): Promise<string> {
   if (hmacSecret) return hmacSecret;
@@ -28,6 +35,24 @@ async function getOrCreateSecret(db: DatabaseAdapter): Promise<string> {
   }
 }
 
+async function getAuthEpoch(db: DatabaseAdapter): Promise<number> {
+  if (cachedAuthEpoch !== null) return cachedAuthEpoch;
+  const stored = await db.getSetting("auth_epoch");
+  if (!stored) {
+    cachedAuthEpoch = 0;
+    return 0;
+  }
+  const n = parseInt(stored, 10);
+  cachedAuthEpoch = Number.isFinite(n) ? n : 0;
+  return cachedAuthEpoch;
+}
+
+async function bumpAuthEpoch(db: DatabaseAdapter): Promise<void> {
+  const next = (cachedAuthEpoch ?? (await getAuthEpoch(db))) + 1;
+  cachedAuthEpoch = next;
+  db.setSetting("auth_epoch", String(next));
+}
+
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 10);
 }
@@ -44,10 +69,12 @@ export async function createToken(
   db: DatabaseAdapter
 ): Promise<string> {
   const secret = await getOrCreateSecret(db);
+  const authEpoch = await getAuthEpoch(db);
   const payload = {
     username,
     iat: Date.now(),
     exp: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+    authEpoch,
   };
   const data = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = createHmac("sha256", secret).update(data).digest("base64url");
@@ -76,9 +103,38 @@ export async function verifyToken(
       Buffer.from(data, "base64url").toString("utf-8")
     );
     if (payload.exp < Date.now()) return null;
+    const tokenEpoch = payload.authEpoch ?? 0;
+    const currentEpoch = await getAuthEpoch(db);
+    if (tokenEpoch !== currentEpoch) return null;
     return { username: payload.username };
   } catch {
     return null;
+  }
+}
+
+export type SetupResult = "created" | "already_configured" | "failed";
+
+export async function trySetupInitialUser(
+  db: DatabaseAdapter,
+  username: string,
+  password: string,
+): Promise<SetupResult> {
+  if (await db.hasAnyUser()) return "already_configured";
+
+  const hash = await hashPassword(password);
+  try {
+    db.createUser(username, hash);
+    const user = await db.getUser(username);
+    if (!user) {
+      if (await db.hasAnyUser()) return "already_configured";
+      return "failed";
+    }
+    await bumpAuthEpoch(db);
+    return "created";
+  } catch (err) {
+    console.error("[LoadFlux] Failed to create initial user:", err);
+    if (await db.hasAnyUser()) return "already_configured";
+    return "failed";
   }
 }
 
@@ -93,6 +149,7 @@ export async function setupInitialAuth(
 
     if (!existing) {
       db.createUser(username, hash);
+      await bumpAuthEpoch(db);
       return;
     }
 
@@ -100,9 +157,9 @@ export async function setupInitialAuth(
     const matches = await verifyPassword(password, existing.password_hash);
     if (!matches) {
       db.updateUserPassword(username, hash);
+      await bumpAuthEpoch(db);
     }
   } catch (err) {
     console.error("[LoadFlux] Failed to setup initial auth:", err);
   }
 }
-

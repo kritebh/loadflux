@@ -30,6 +30,12 @@ interface LoadFluxConfig {
   };
   slowRequestThreshold?: number;
   excludeRoutes?: string[];
+  /** Skip mounting LoadFlux when the resolved listen host is loopback */
+  disableOnLocalhost?: boolean;
+  /** Server bind host; used with `disableOnLocalhost` (env: `LOADFLUX_LISTEN_HOST`, `HOST`) */
+  listenHost?: string;
+  /** Use `X-Forwarded-For` for login rate limiting (env: `LOADFLUX_TRUST_PROXY`) */
+  trustProxy?: boolean;
 }
 ```
 
@@ -164,6 +170,35 @@ loadflux({
 })
 ```
 
+### `disableOnLocalhost`
+
+| | |
+|---|---|
+| **Type** | `boolean` |
+| **Default** | `false` |
+
+When `true`, LoadFlux does not register middleware or routes if the resolved **listen host** is a loopback address (`127.0.0.1`, `::1`, `localhost`, etc.). Use this so local development servers do not expose the dashboard.
+
+The listen host is taken from `listenHost` in config, then `LOADFLUX_LISTEN_HOST`, then `HOST`, in that order. It should match the host you pass to `app.listen(...)`.
+
+### `listenHost`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Default** | From `LOADFLUX_LISTEN_HOST` or `HOST`, else unset |
+
+Explicit bind host of your HTTP server. Only needed for `disableOnLocalhost` (and should mirror your real listen address).
+
+### `trustProxy`
+
+| | |
+|---|---|
+| **Type** | `boolean` |
+| **Default** | `false` |
+
+When `true`, login **rate limiting** uses the client IP from `X-Forwarded-For` (first hop). Enable only behind a **trusted** reverse proxy that sets this header correctly. You can also set `LOADFLUX_TRUST_PROXY=1`.
+
 ## Full example with all options
 
 ```typescript
@@ -187,5 +222,8 @@ app.use(loadflux({
   },
   slowRequestThreshold: 1000, // flag requests > 1 second
   excludeRoutes: ["/health", "/ready", "/documentation/*"],
+  disableOnLocalhost: true,
+  listenHost: "0.0.0.0", // must match app.listen host when using disableOnLocalhost
+  trustProxy: true, // only behind a trusted reverse proxy
 }));
 ```

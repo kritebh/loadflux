@@ -3,6 +3,8 @@ sidebar_position: 1
 slug: /
 ---
 
+import Screenshot from "@site/src/components/Screenshot";
+
 # Introduction
 
 LoadFlux is a lightweight npm package that embeds a Grafana-like server monitoring dashboard into your existing Node.js server. It runs on the same process no separate services, no external dependencies.
@@ -24,11 +26,14 @@ LoadFlux is a lightweight npm package that embeds a Grafana-like server monitori
 - **Authentication** — password-protected dashboard with HMAC session tokens
 - **Data retention** — configurable auto-cleanup (default: 90 days)
 - **Dark/light mode** — theme follows system preference or manual toggle
+- **Custom time ranges** — from/to date-time on System, Endpoints, App metrics, and Errors (default rolling last hour)
+- **Search & filters** — filter endpoints and slow requests by text; filter errors by status and search the log
+- **Ops-friendly config** — optional `disableOnLocalhost`, `listenHost`, and `trustProxy` for deploy and reverse proxies
 - **< 0.5ms overhead** — minimal impact on your application's hot path
 
 ## Preview
 
-![LoadFlux Dashboard](/img/screenshots/dashboard.png)
+<Screenshot name="dashboard" alt="LoadFlux Dashboard" />
 
 ## Quick start
 

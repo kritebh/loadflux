@@ -2,13 +2,15 @@
 sidebar_position: 1
 ---
 
+import Screenshot from "@site/src/components/Screenshot";
+
 # Dashboard Overview
 
 The LoadFlux dashboard is a React application served at your configured path (default `/loadflux`). It has six pages accessible from the sidebar.
 
 ## Dashboard (Home)
 
-![Dashboard Home](/img/screenshots/dashboard.png)
+<Screenshot name="dashboard" alt="Dashboard Home" />
 
 The main page shows a real-time overview:
 
@@ -25,7 +27,7 @@ All data on this page updates in real-time via SSE (every 2 seconds).
 
 ## System
 
-![System Metrics](/img/screenshots/system.png)
+<Screenshot name="system" alt="System Metrics" />
 
 System resource monitoring with time-series charts:
 
@@ -34,11 +36,11 @@ System resource monitoring with time-series charts:
 - **Disk** — Used vs total space (where available)
 - **Network I/O** — Bytes received/transmitted (Linux only; macOS/Windows show N/A)
 
-Use the time range selector to view data from the last hour to 90 days.
+Use the **time range** control (custom from/to date and time, then **Apply**) to query any window within your retention. **Last 1h** resets to a rolling one-hour window (the default). Wide ranges are **downsampled** on the client so charts stay responsive.
 
 ## Endpoints
 
-![Endpoints](/img/screenshots/endpoints.png)
+<Screenshot name="endpoints" alt="Endpoints" />
 
 Detailed API endpoint analytics:
 
@@ -46,10 +48,11 @@ Detailed API endpoint analytics:
 - **Top endpoints by latency** — Slowest routes (by average duration)
 - **Slow requests** — Requests exceeding the slow threshold (default 500ms)
 - **Endpoint metrics table** — Full breakdown with request count, error count, and latency percentiles
+- **Search** — Filter top endpoints, the metrics table, and slow requests by path or method (debounced; server-side `search` query)
 
 ## App Metrics
 
-![App Metrics](/img/screenshots/app-metrics.png)
+<Screenshot name="app-metrics" alt="App Metrics" />
 
 Node.js process health:
 
@@ -60,16 +63,18 @@ Node.js process health:
 
 ## Errors
 
-![Errors](/img/screenshots/errors.png)
+<Screenshot name="errors" alt="Errors" />
 
 Error tracking and analysis:
 
 - **Status distribution** — Doughnut chart of 2xx/3xx/4xx/5xx responses
 - **Error log** — Table of individual error responses with timestamp, method, path, status code, error message, and duration
+- **Search** — Filter the log by path, method, message, or related text (debounced)
+- **Status filter** — Restrict the log to a specific HTTP status code seen in the current range
 
 ## Settings
 
-![Settings](/img/screenshots/settings.png)
+<Screenshot name="settings" alt="Settings" />
 
 Dashboard configuration:
 
@@ -79,17 +84,13 @@ Dashboard configuration:
 
 ## Theme
 
-Toggle between dark and light mode using the theme switch in the sidebar. The dashboard respects your system preference by default.
+Toggle between dark and light mode using the theme switch in the navbar. The dashboard respects your system preference by default.
 
-## Time Range Selector
+## Time range (historical pages)
 
-Most pages include a time range selector with preset options:
+**System**, **Endpoints**, **App metrics**, and **Errors** share the same control:
 
-- Last 1 hour
-- Last 6 hours
-- Last 24 hours
-- Last 7 days
-- Last 30 days
-- Last 90 days
+- **From / To** — Pick local date and time for the start and end of the window, then click **Apply**. The end must be after the start.
+- **Last 1h** — Clears the custom window and uses a **rolling** last hour (`now - 1h` … `now`), refreshed on each poll.
 
-Select a range to query historical data from the database.
+The home dashboard continues to use the live SSE snapshot (not this range).

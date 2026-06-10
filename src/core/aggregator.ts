@@ -61,17 +61,20 @@ export class Aggregator {
       const method = key.substring(0, colonIdx);
       const path = key.substring(colonIdx + 1);
 
-      const durations = records
-        .map((r) => r.durationMs)
-        .sort((a, b) => a - b);
-      const totalDuration = durations.reduce((a, b) => a + b, 0);
+      const durations: number[] = [];
+      let totalDuration = 0;
+      let totalResBytes = 0;
+      let s2xx = 0;
+      let s3xx = 0;
+      let s4xx = 0;
+      let s5xx = 0;
+      let errCount = 0;
 
-      let s2xx = 0,
-        s3xx = 0,
-        s4xx = 0,
-        s5xx = 0,
-        errCount = 0;
       for (const r of records) {
+        durations.push(r.durationMs);
+        totalDuration += r.durationMs;
+        totalResBytes += r.responseBytes;
+
         const code = r.statusCode;
         if (code >= 200 && code < 300) s2xx++;
         else if (code >= 300 && code < 400) s3xx++;
@@ -82,7 +85,21 @@ export class Aggregator {
           s5xx++;
           errCount++;
         }
+
+        if (code >= 400) {
+          errors.push({
+            timestamp: r.timestamp,
+            method: r.method,
+            path: r.path,
+            status_code: r.statusCode,
+            error_msg: r.errorMessage ?? null,
+            stack_trace: r.stackTrace ?? null,
+            duration_ms: r.durationMs,
+          });
+        }
       }
+
+      durations.sort((a, b) => a - b);
 
       endpointRows.push({
         timestamp,
@@ -99,27 +116,12 @@ export class Aggregator {
         p90_duration: percentile(durations, 90),
         p95_duration: percentile(durations, 95),
         p99_duration: percentile(durations, 99),
-        total_res_bytes: records.reduce((a, r) => a + r.responseBytes, 0),
+        total_res_bytes: totalResBytes,
         status_2xx: s2xx,
         status_3xx: s3xx,
         status_4xx: s4xx,
         status_5xx: s5xx,
       });
-
-      // Collect individual errors for the error_log table
-      for (const r of records) {
-        if (r.statusCode >= 400) {
-          errors.push({
-            timestamp: r.timestamp,
-            method: r.method,
-            path: r.path,
-            status_code: r.statusCode,
-            error_msg: r.errorMessage ?? null,
-            stack_trace: r.stackTrace ?? null,
-            duration_ms: r.durationMs,
-          });
-        }
-      }
     }
 
     // Batch insert (for SQLite: single transaction, for MongoDB: insertMany)
@@ -129,12 +131,10 @@ export class Aggregator {
       console.error("[LoadFlux] Failed to insert endpoint metrics batch:", err);
     }
 
-    for (const e of errors) {
-      try {
-        this.db.insertError(e);
-      } catch (err) {
-        console.error("[LoadFlux] Failed to insert error log:", err);
-      }
+    try {
+      this.db.insertErrorsBatch(errors);
+    } catch (err) {
+      console.error("[LoadFlux] Failed to insert error log batch:", err);
     }
   }
 }

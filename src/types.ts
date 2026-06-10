@@ -41,6 +41,12 @@ export interface LoadFluxConfig {
 
   /** Routes to exclude from monitoring (e.g., ["/health"]) */
   excludeRoutes?: string[];
+
+  disableOnLocalhost?: boolean;
+
+  listenHost?: string;
+
+  trustProxy?: boolean;
 }
 
 export interface ResolvedConfig {
@@ -61,6 +67,9 @@ export interface ResolvedConfig {
   };
   slowRequestThreshold: number;
   excludeRoutes: string[];
+  disableOnLocalhost: boolean;
+  listenHost: string | null;
+  trustProxy: boolean;
 }
 
 // ─── Request Record (raw, in-memory before aggregation) ─────────────────────
@@ -163,6 +172,11 @@ export interface TimeRange {
   to: number;
 }
 
+export interface QueryFilter {
+  search?: string;
+  status?: string;
+}
+
 export type TopEndpointMetric =
   | "request_count"
   | "avg_duration"
@@ -205,45 +219,68 @@ export interface DatabaseAdapter {
   insertProcessMetrics(metrics: ProcessMetricRow): void;
   insertEndpointMetricsBatch(rows: EndpointMetricRow[]): void;
   insertError(error: ErrorLogRow): void;
+  insertErrorsBatch(errors: ErrorLogRow[]): void;
+  insertSystemAndProcessMetrics(
+    system: SystemMetricRow,
+    process: ProcessMetricRow,
+  ): void;
 
   // Queries (async to support both sync SQLite and async MongoDB)
-  getSystemMetrics(range: TimeRange): Promise<SystemMetricRow[]>;
-  getProcessMetrics(range: TimeRange): Promise<ProcessMetricRow[]>;
-  getEndpointMetrics(range: TimeRange): Promise<EndpointMetricRow[]>;
+  getSystemMetrics(
+    range: TimeRange,
+    maxPoints?: number,
+  ): Promise<SystemMetricRow[]>;
+  getProcessMetrics(
+    range: TimeRange,
+    maxPoints?: number,
+  ): Promise<ProcessMetricRow[]>;
+  getEndpointMetrics(
+    range: TimeRange,
+    filter?: QueryFilter,
+  ): Promise<EndpointMetricRow[]>;
   getTopEndpoints(
     metric: TopEndpointMetric,
     limit: number,
-    range: TimeRange
+    range: TimeRange,
+    filter?: QueryFilter,
   ): Promise<TopEndpointRow[]>;
   getSlowRequests(
     thresholdMs: number,
-    range: TimeRange
+    range: TimeRange,
+    filter?: QueryFilter,
   ): Promise<EndpointMetricRow[]>;
-  getErrorLog(range: TimeRange): Promise<ErrorLogRow[]>;
+  getErrorLog(range: TimeRange, filter?: QueryFilter): Promise<ErrorLogRow[]>;
+  /** Distinct HTTP status codes present in the error log for the time range (sorted ascending). */
+  getErrorStatusCodes(range: TimeRange): Promise<number[]>;
   getStatusDistribution(range: TimeRange): Promise<StatusDistribution>;
   getOverview(range: TimeRange): Promise<OverviewMetrics>;
 
   // Paginated queries
   getSystemMetricsPaginated(
     range: TimeRange,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    maxPoints?: number,
   ): Promise<PaginatedResult<SystemMetricRow>>;
   getProcessMetricsPaginated(
     range: TimeRange,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    maxPoints?: number,
   ): Promise<PaginatedResult<ProcessMetricRow>>;
   getEndpointMetricsPaginated(
     range: TimeRange,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<EndpointMetricRow>>;
   getSlowRequestsPaginated(
     thresholdMs: number,
     range: TimeRange,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<EndpointMetricRow>>;
   getErrorLogPaginated(
     range: TimeRange,
-    pagination: PaginationParams
+    pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<ErrorLogRow>>;
 
   // Maintenance
@@ -255,8 +292,10 @@ export interface DatabaseAdapter {
 
   // Auth (async for MongoDB compat)
   getUser(
-    username: string
+    username: string,
   ): Promise<{ username: string; password_hash: string } | null>;
+  /** True if at least one dashboard user exists (auth is configured). */
+  hasAnyUser(): Promise<boolean>;
   createUser(username: string, passwordHash: string): void;
   updateUserPassword(username: string, passwordHash: string): void;
 }

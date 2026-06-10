@@ -5,69 +5,28 @@ import {
   fetchSlowRequestsPaginated,
   type TopEndpointRow,
   type EndpointMetricRow,
-  type PaginatedResponse,
 } from "../api/client";
-import { useTimeRange, usePolledData } from "../hooks/useMetrics";
+import { useTimeRange, usePolledData, usePaginatedPolledData } from "../hooks/useMetrics";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { BarChart } from "../components/charts/BarChart";
 import { MetricsTable } from "../components/tables/MetricsTable";
 import { Pagination } from "../components/Pagination";
-
-function formatDuration(ms: number): string {
-  if (ms < 1) return `${(ms * 1000).toFixed(0)}us`;
-  if (ms < 1000) return `${ms.toFixed(1)}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
-}
-
-function formatDate(timestamp: number): string {
-  return new Date(timestamp).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function usePaginatedPolledData<T>(
-  fetcher: (
-    from: number,
-    to: number,
-    page: number,
-    limit: number,
-  ) => Promise<PaginatedResponse<T>>,
-  rangeMs: number,
-  page: number,
-  limit = 200,
-  intervalMs = 10000,
-) {
-  const [data, setData] = useState<PaginatedResponse<T> | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(async () => {
-    try {
-      const now = Date.now();
-      const result = await fetcher(now - rangeMs, now, page, limit);
-      setData(result);
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AuthError") throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, [fetcher, rangeMs, page, limit]);
-
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, intervalMs);
-    return () => clearInterval(id);
-  }, [refresh, intervalMs]);
-
-  return { data, loading, refresh };
-}
+import { IconSearch } from "../components/icons";
+import { formatDate, formatDuration } from "../utils/format";
 
 export function Endpoints() {
-  const { rangeMs, setRangeMs } = useTimeRange();
+  const {
+    range,
+    rangeSyncToken,
+    getRange,
+    setCustomRange,
+    resetToDefault,
+    isDefaultLastHour,
+  } = useTimeRange();
   const [topMetric, setTopMetric] = useState<string>("request_count");
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [endpointsPage, setEndpointsPage] = useState(1);
   const [endpointsLimit, setEndpointsLimit] = useState(200);
   const [slowPage, setSlowPage] = useState(1);
@@ -77,7 +36,7 @@ export function Endpoints() {
   useEffect(() => {
     setEndpointsPage(1);
     setSlowPage(1);
-  }, [rangeMs]);
+  }, [rangeSyncToken, debouncedSearch]);
 
   const handleEndpointsLimitChange = useCallback((newLimit: number) => {
     setEndpointsLimit(newLimit);
@@ -90,24 +49,37 @@ export function Endpoints() {
   }, []);
 
   const topFetcher = useCallback(
-    (from: number, to: number) => fetchTopEndpoints(topMetric, from, to),
-    [topMetric],
+    (from: number, to: number) =>
+      fetchTopEndpoints(topMetric, from, to, 10, debouncedSearch),
+    [topMetric, debouncedSearch],
   );
   const { data: topData } = usePolledData<TopEndpointRow[]>(
     topFetcher,
-    rangeMs,
+    getRange,
+  );
+
+  const paginatedEndpointFetcher = useCallback(
+    (from: number, to: number, page: number, limit: number) =>
+      fetchEndpointMetricsPaginated(from, to, page, limit, debouncedSearch),
+    [debouncedSearch],
   );
 
   const { data: endpointsPaginated } = usePaginatedPolledData(
-    fetchEndpointMetricsPaginated,
-    rangeMs,
+    paginatedEndpointFetcher,
+    getRange,
     endpointsPage,
     endpointsLimit,
   );
 
+  const paginatedSlowFetcher = useCallback(
+    (from: number, to: number, page: number, limit: number) =>
+      fetchSlowRequestsPaginated(from, to, page, limit, undefined, debouncedSearch),
+    [debouncedSearch],
+  );
+
   const { data: slowPaginated } = usePaginatedPolledData(
-    fetchSlowRequestsPaginated,
-    rangeMs,
+    paginatedSlowFetcher,
+    getRange,
     slowPage,
     slowLimit,
   );
@@ -118,9 +90,29 @@ export function Endpoints() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col gap-3">
         <h1 className="text-2xl font-bold">Endpoints</h1>
-        <TimeRangeSelector value={rangeMs} onChange={setRangeMs} />
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          <div className="relative flex-1 min-w-0 max-w-md">
+            <IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search…"
+              aria-label="Search endpoints"
+              className="w-full text-sm pl-9 pr-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+          <div className="shrink-0 sm:ml-auto">
+            <TimeRangeSelector
+              range={range}
+              rangeSyncToken={rangeSyncToken}
+              isDefaultLastHour={isDefaultLastHour}
+              onApply={setCustomRange}
+              onResetDefault={resetToDefault}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Top endpoints chart */}

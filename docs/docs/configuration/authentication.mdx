@@ -2,11 +2,13 @@
 sidebar_position: 3
 ---
 
+import Screenshot from "@site/src/components/Screenshot";
+
 # Authentication
 
 LoadFlux protects the dashboard with username/password authentication.
 
-![Login Page](/img/screenshots/login.png)
+<Screenshot name="login" alt="Login Page" />
 
 ## Setting up auth
 
@@ -60,3 +62,13 @@ All LoadFlux API endpoints (except `/api/login` and `/api/logout`) require authe
 - **Header**: `Authorization: Bearer <token>`
 
 Unauthenticated requests receive a `401 Unauthorized` response.
+
+## Login rate limiting and reverse proxies
+
+Failed login attempts are rate-limited per client IP. By default the IP is the TCP peer. If your app sits behind a **trusted** reverse proxy that sets `X-Forwarded-For` correctly, enable proxy-aware IP resolution:
+
+```typescript
+app.use(loadflux({ trustProxy: true }));
+```
+
+Or set `LOADFLUX_TRUST_PROXY=1` in the environment. Do not enable this unless you trust the proxy to sanitize or set that header; otherwise attackers can spoof IPs and bypass rate limits.

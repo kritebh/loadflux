@@ -1,5 +1,11 @@
+import { useMemo } from "react";
 import { Doughnut } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
+import { useTheme } from "../../hooks/useTheme";
+import {
+  chartLegendColor,
+  chartTooltipOptions,
+} from "../../utils/chartTheme";
 
 interface Props {
   labels: string[];
@@ -9,46 +15,46 @@ interface Props {
 }
 
 export function DoughnutChart({ labels, data, colors, height = 250 }: Props) {
-  const isDark = document.documentElement.classList.contains("dark");
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
 
-  const chartData = {
-    labels,
-    datasets: [
-      {
-        data,
-        backgroundColor: colors,
-        borderColor: isDark ? "#1f2937" : "#ffffff",
-        borderWidth: 2,
-      },
-    ],
-  };
-
-  const options: ChartOptions<"doughnut"> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    cutout: "60%",
-    plugins: {
-      legend: {
-        position: "bottom",
-        labels: {
-          usePointStyle: true,
-          pointStyle: "circle",
-          boxWidth: 8,
-          padding: 16,
-          color: isDark ? "#9ca3af" : "#6b7280",
+  const chartData = useMemo(
+    () => ({
+      labels,
+      datasets: [
+        {
+          data,
+          backgroundColor: colors,
+          borderColor: isDark ? "#1f2937" : "#ffffff",
+          borderWidth: 2,
         },
+      ],
+    }),
+    [labels, data, colors, isDark],
+  );
+
+  const options: ChartOptions<"doughnut"> = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      cutout: "60%",
+      plugins: {
+        legend: {
+          position: "bottom",
+          labels: {
+            usePointStyle: true,
+            pointStyle: "circle",
+            boxWidth: 8,
+            padding: 16,
+            color: chartLegendColor(isDark),
+          },
+        },
+        tooltip: chartTooltipOptions(isDark),
       },
-      tooltip: {
-        backgroundColor: isDark ? "#1f2937" : "#ffffff",
-        titleColor: isDark ? "#f3f4f6" : "#111827",
-        bodyColor: isDark ? "#d1d5db" : "#4b5563",
-        borderColor: isDark ? "#374151" : "#e5e7eb",
-        borderWidth: 1,
-        padding: 10,
-        cornerRadius: 8,
-      },
-    },
-  };
+    }),
+    [isDark],
+  );
 
   return (
     <div style={{ height }}>

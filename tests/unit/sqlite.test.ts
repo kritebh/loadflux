@@ -1,12 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { SQLiteAdapter } from "../../src/db/sqlite.js";
 import fs from "fs";
-import path from "path";
-import os from "os";
-
-function tmpDbPath(): string {
-  return path.join(os.tmpdir(), `loadflux-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
-}
+import { SQLiteAdapter } from "../../src/db/sqlite.js";
+import { tmpDbPath, cleanupSqliteDb } from "../helpers/db.js";
 
 describe("SQLiteAdapter", () => {
   let db: SQLiteAdapter;
@@ -20,9 +15,7 @@ describe("SQLiteAdapter", () => {
 
   afterEach(async () => {
     await db.close();
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupSqliteDb(dbPath);
   });
 
   it("creates database and runs migrations", async () => {
@@ -50,6 +43,32 @@ describe("SQLiteAdapter", () => {
     expect(rows.length).toBe(1);
     expect(rows[0].cpu_percent).toBe(25.5);
     expect(rows[0].mem_percent).toBe(50.0);
+  });
+
+  it("samples system metrics for large ranges", async () => {
+    const start = Date.now() - 100_000;
+    for (let i = 0; i < 120; i++) {
+      db.insertSystemMetrics({
+        timestamp: start + i * 1000,
+        cpu_percent: 10 + (i % 30),
+        mem_total: 16_000_000_000,
+        mem_used: 8_000_000_000 + i * 1000,
+        mem_percent: 50 + (i % 10),
+        disk_total: 500_000_000_000,
+        disk_used: 250_000_000_000,
+        disk_percent: 50,
+        net_rx_bytes: i * 100,
+        net_tx_bytes: i * 120,
+      });
+    }
+
+    const sampled = await db.getSystemMetrics(
+      { from: start, to: start + 120_000 },
+      12,
+    );
+    expect(sampled.length).toBeLessThanOrEqual(12);
+    expect(sampled.length).toBeGreaterThan(0);
+    expect(sampled[0].timestamp).toBeGreaterThanOrEqual(start);
   });
 
   it("inserts and queries process metrics", async () => {
@@ -119,6 +138,237 @@ describe("SQLiteAdapter", () => {
     expect(rows.length).toBe(1);
     expect(rows[0].status_code).toBe(500);
     expect(rows[0].error_msg).toBe("Internal Server Error");
+  });
+
+  it("filters paginated endpoint and error queries", async () => {
+    const now = Date.now();
+    db.insertEndpointMetricsBatch([
+      {
+        timestamp: now,
+        method: "GET",
+        path: "/alpha/users",
+        request_count: 10,
+        error_count: 0,
+        total_duration: 100,
+        min_duration: 1,
+        max_duration: 20,
+        avg_duration: 10,
+        p50_duration: 9,
+        p90_duration: 14,
+        p95_duration: 16,
+        p99_duration: 18,
+        total_res_bytes: 1000,
+        status_2xx: 10,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+      {
+        timestamp: now + 10,
+        method: "POST",
+        path: "/beta/users",
+        request_count: 12,
+        error_count: 1,
+        total_duration: 200,
+        min_duration: 2,
+        max_duration: 30,
+        avg_duration: 16,
+        p50_duration: 10,
+        p90_duration: 20,
+        p95_duration: 25,
+        p99_duration: 28,
+        total_res_bytes: 2000,
+        status_2xx: 11,
+        status_3xx: 0,
+        status_4xx: 1,
+        status_5xx: 0,
+      },
+    ]);
+
+    db.insertError({
+      timestamp: now,
+      method: "GET",
+      path: "/alpha/users",
+      status_code: 500,
+      error_msg: "alpha exploded",
+      stack_trace: null,
+      duration_ms: 30,
+    });
+    db.insertError({
+      timestamp: now + 1,
+      method: "POST",
+      path: "/beta/users",
+      status_code: 400,
+      error_msg: "beta bad request",
+      stack_trace: null,
+      duration_ms: 20,
+    });
+
+    const endpointPage = await db.getEndpointMetricsPaginated(
+      { from: now - 1000, to: now + 2000 },
+      { page: 1, limit: 50 },
+      { search: "alpha" },
+    );
+    expect(endpointPage.data.length).toBe(1);
+    expect(endpointPage.data[0].path).toContain("/alpha");
+
+    const errorPage = await db.getErrorLogPaginated(
+      { from: now - 1000, to: now + 2000 },
+      { page: 1, limit: 50 },
+      { search: "beta" },
+    );
+    expect(errorPage.data.length).toBe(1);
+    expect(errorPage.data[0].path).toContain("/beta");
+
+    const statusPage = await db.getErrorLogPaginated(
+      { from: now - 1000, to: now + 2000 },
+      { page: 1, limit: 50 },
+      { status: "5xx" },
+    );
+    expect(statusPage.data.length).toBe(1);
+    expect(statusPage.data[0].status_code).toBe(500);
+  });
+
+  it("treats SQL-like search input as literal text", async () => {
+    const now = Date.now();
+    db.insertEndpointMetricsBatch([
+      {
+        timestamp: now,
+        method: "GET",
+        path: "/api/users",
+        request_count: 5,
+        error_count: 0,
+        total_duration: 50,
+        min_duration: 5,
+        max_duration: 20,
+        avg_duration: 10,
+        p50_duration: 9,
+        p90_duration: 14,
+        p95_duration: 16,
+        p99_duration: 18,
+        total_res_bytes: 500,
+        status_2xx: 5,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+      {
+        timestamp: now,
+        method: "GET",
+        path: "/' OR 1=1 --",
+        request_count: 1,
+        error_count: 0,
+        total_duration: 10,
+        min_duration: 5,
+        max_duration: 10,
+        avg_duration: 10,
+        p50_duration: 10,
+        p90_duration: 10,
+        p95_duration: 10,
+        p99_duration: 10,
+        total_res_bytes: 100,
+        status_2xx: 1,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+    ]);
+
+    const page = await db.getEndpointMetricsPaginated(
+      { from: now - 1000, to: now + 2000 },
+      { page: 1, limit: 50 },
+      { search: "' OR 1=1 --" },
+    );
+    expect(page.data.length).toBe(1);
+    expect(page.data[0].path).toBe("/' OR 1=1 --");
+  });
+
+  it("does not treat LIKE wildcards in search as pattern matchers", async () => {
+    const now = Date.now();
+    db.insertEndpointMetricsBatch([
+      {
+        timestamp: now,
+        method: "GET",
+        path: "/api/users",
+        request_count: 5,
+        error_count: 0,
+        total_duration: 50,
+        min_duration: 5,
+        max_duration: 20,
+        avg_duration: 10,
+        p50_duration: 9,
+        p90_duration: 14,
+        p95_duration: 16,
+        p99_duration: 18,
+        total_res_bytes: 500,
+        status_2xx: 5,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+      {
+        timestamp: now,
+        method: "GET",
+        path: "/sale/100%off",
+        request_count: 2,
+        error_count: 0,
+        total_duration: 20,
+        min_duration: 5,
+        max_duration: 15,
+        avg_duration: 10,
+        p50_duration: 10,
+        p90_duration: 12,
+        p95_duration: 14,
+        p99_duration: 15,
+        total_res_bytes: 200,
+        status_2xx: 2,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+    ]);
+
+    const page = await db.getEndpointMetricsPaginated(
+      { from: now - 1000, to: now + 2000 },
+      { page: 1, limit: 50 },
+      { search: "%" },
+    );
+    expect(page.data.length).toBe(1);
+    expect(page.data[0].path).toBe("/sale/100%off");
+  });
+
+  it("returns distinct error status codes in range", async () => {
+    const now = Date.now();
+    db.insertError({
+      timestamp: now,
+      method: "GET",
+      path: "/a",
+      status_code: 404,
+      error_msg: "nf",
+      stack_trace: null,
+      duration_ms: 10,
+    });
+    db.insertError({
+      timestamp: now + 1,
+      method: "GET",
+      path: "/b",
+      status_code: 500,
+      error_msg: "err",
+      stack_trace: null,
+      duration_ms: 20,
+    });
+    db.insertError({
+      timestamp: now + 2,
+      method: "GET",
+      path: "/c",
+      status_code: 500,
+      error_msg: "err2",
+      stack_trace: null,
+      duration_ms: 30,
+    });
+
+    const codes = await db.getErrorStatusCodes({ from: now - 1000, to: now + 5000 });
+    expect(codes).toEqual([404, 500]);
   });
 
   it("returns top endpoints by request count", async () => {
@@ -226,5 +476,11 @@ describe("SQLiteAdapter", () => {
 
     const noUser = await db.getUser("nonexistent");
     expect(noUser).toBeNull();
+  });
+
+  it("hasAnyUser reflects whether any auth row exists", async () => {
+    expect(await db.hasAnyUser()).toBe(false);
+    db.createUser("first", "hash");
+    expect(await db.hasAnyUser()).toBe(true);
   });
 });

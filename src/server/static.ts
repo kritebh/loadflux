@@ -32,6 +32,11 @@ function getDistUiDir(): string {
   return _distUiDir;
 }
 
+/** @internal Resets cached dist-ui path (for unit tests). */
+export function resetDistUiDirCache(): void {
+  _distUiDir = null;
+}
+
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
   ".js": "application/javascript",
@@ -68,6 +73,9 @@ export function createStaticHandler(basePath: string) {
     const distUiDir = getDistUiDir();
     const urlPath = (req.url || "/").split("?")[0];
     let relativePath = urlPath.substring(basePath.length) || "/";
+    if (relativePath.startsWith("/")) {
+      relativePath = relativePath.slice(1);
+    }
 
     // Prevent directory traversal
     relativePath = path.normalize(relativePath).replace(
@@ -75,7 +83,15 @@ export function createStaticHandler(basePath: string) {
       ""
     );
 
-    const filePath = path.join(distUiDir, relativePath);
+    const filePath = path.resolve(distUiDir, relativePath || ".");
+
+    // Prevent directory traversal (mirror tryServeAsset guard)
+    if (!filePath.startsWith(distUiDir + path.sep) && filePath !== distUiDir) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
+
     const ext = path.extname(filePath);
 
     if (ext) {

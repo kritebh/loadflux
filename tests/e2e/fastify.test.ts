@@ -84,6 +84,76 @@ describe("Fastify E2E", () => {
     expect(res.status).toBe(401);
   });
 
+  it("auth/status is public and reports configured vs authenticated", async () => {
+    const res = await fetch(`${BASE_URL}/loadflux/api/auth/status`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.configured).toBe(true);
+    expect(data.authenticated).toBe(false);
+
+    const token = await loginAndGetToken();
+    const res2 = await fetch(`${BASE_URL}/loadflux/api/auth/status`, {
+      headers: authHeaders(token),
+    });
+    const data2 = await res2.json();
+    expect(data2.authenticated).toBe(true);
+  });
+
+  it("returns and updates settings", async () => {
+    const token = await loginAndGetToken();
+    const getRes = await fetch(`${BASE_URL}/loadflux/api/settings`, {
+      headers: authHeaders(token),
+    });
+    expect(getRes.status).toBe(200);
+    const settings = await getRes.json();
+    expect(settings.retention_days).toBe(90);
+
+    const postRes = await fetch(`${BASE_URL}/loadflux/api/settings`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ slow_threshold: 750 }),
+    });
+    expect(postRes.status).toBe(200);
+
+    const getRes2 = await fetch(`${BASE_URL}/loadflux/api/settings`, {
+      headers: authHeaders(token),
+    });
+    const updated = await getRes2.json();
+    expect(updated.slow_threshold).toBe(750);
+  });
+
+  it("filters errors by search and status", async () => {
+    const token = await loginAndGetToken();
+    await fetch(`${BASE_URL}/api/hello`);
+    await fetch(`${BASE_URL}/api/error`);
+    await new Promise((r) => setTimeout(r, 2000));
+
+    const now = Date.now();
+    const errorRes = await fetch(
+      `${BASE_URL}/loadflux/api/errors?from=${now - 60000}&to=${now + 1000}&page=1&limit=100&search=error`,
+      { headers: authHeaders(token) },
+    );
+    expect(errorRes.status).toBe(200);
+    const errorData = await errorRes.json();
+    expect(errorData.data.length).toBeGreaterThan(0);
+    expect(
+      errorData.data.every((r: { path: string }) =>
+        r.path.toLowerCase().includes("error"),
+      ),
+    ).toBe(true);
+
+    const statusRes = await fetch(
+      `${BASE_URL}/loadflux/api/errors?from=${now - 60000}&to=${now + 1000}&page=1&limit=100&status=5xx`,
+      { headers: authHeaders(token) },
+    );
+    const statusData = await statusRes.json();
+    expect(
+      statusData.data.every(
+        (r: { status_code: number }) => r.status_code >= 500,
+      ),
+    ).toBe(true);
+  });
+
   it("returns snapshot with server info", async () => {
     const token = await loginAndGetToken();
     const res = await fetch(`${BASE_URL}/loadflux/api/snapshot`, {

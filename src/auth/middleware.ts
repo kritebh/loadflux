@@ -2,16 +2,23 @@ import type { IncomingMessage } from "http";
 import type { DatabaseAdapter } from "../types.js";
 import { verifyToken } from "./auth.js";
 
+export interface AuthCheckOptions {
+  /** When true, skip hasAnyUser() DB lookup (caller already checked). */
+  configured?: boolean;
+}
+
 export async function isAuthenticated(
   req: IncomingMessage,
-  db: DatabaseAdapter
+  db: DatabaseAdapter,
+  options?: AuthCheckOptions,
 ): Promise<boolean> {
   try {
-    // Check if auth is configured at all
-    const hasUsers = await db.getUser("admin");
-    if (!hasUsers) {
-      // No auth configured — allow access (dashboard will show setup prompt)
-      return true;
+    const configured =
+      options?.configured !== undefined
+        ? options.configured
+        : await db.hasAnyUser();
+    if (!configured) {
+      return false;
     }
 
     // Check Authorization header

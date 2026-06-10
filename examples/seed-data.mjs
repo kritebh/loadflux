@@ -1,18 +1,62 @@
 /**
+ * Seed synthetic metrics into a SQLite DB LoadFlux can open (same schema as migrations).
+ *
  * Usage:
- *   node examples/seed-data.mjs            # seeds into ./loadflux.db (default)
- *   node examples/seed-data.mjs path/to.db # seeds into custom path
+ *   node examples/seed-data.mjs                    # ./loadflux.db, last 30 days, hourly points
+ *   node examples/seed-data.mjs ./other.db         # custom path
+ *   node examples/seed-data.mjs --replace          # clear metric + error tables first
+ *   node examples/seed-data.mjs --days=14          # span last N calendar days (from midnight)
+ *   node examples/seed-data.mjs --interval-minutes=30   # denser points (slower / more rows)
+ *
+ * Default is **hourly** samples so ~30 days ≈ 720 rows/table (fast seed + fast charts).
+ * Use the dashboard time picker and choose a range up to your --days window to see the full span.
  */
 
 import Database from "better-sqlite3";
 import { resolve } from "path";
 
-const dbPath = resolve(process.argv[2] || "loadflux.db");
+function parseArgs(argv) {
+  const flags = new Set();
+  let days = 30;
+  let intervalMinutes = 60;
+  const pos = [];
+  for (const a of argv) {
+    if (a === "--replace" || a === "--fresh") {
+      flags.add("replace");
+      continue;
+    }
+    if (a.startsWith("--days=")) {
+      const n = parseInt(a.slice("--days=".length), 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 365) days = n;
+      continue;
+    }
+    if (a.startsWith("--interval-minutes=")) {
+      const n = parseInt(a.slice("--interval-minutes=".length), 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 1440) intervalMinutes = n;
+      continue;
+    }
+    if (!a.startsWith("--")) pos.push(a);
+  }
+  return {
+    dbPath: resolve(pos[0] || "loadflux.db"),
+    replace: flags.has("replace"),
+    days,
+    intervalMinutes,
+  };
+}
+
+const {
+  dbPath,
+  replace,
+  days: DAYS,
+  intervalMinutes,
+} = parseArgs(process.argv.slice(2));
+
 const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
-db.pragma("synchronous = OFF"); // faster bulk insert
+db.pragma("synchronous = OFF");
 
-// ── Ensure tables exist ─────────────────────────────────────────────────────
+// ── Ensure tables exist (aligned with src/db/sqlite.ts migration v1) ───────
 db.exec(`
   CREATE TABLE IF NOT EXISTS loadflux_settings (
     key   TEXT PRIMARY KEY,
@@ -70,6 +114,7 @@ db.exec(`
     status_5xx      INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_endpoint_ts ON loadflux_endpoint_metrics(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_endpoint_path ON loadflux_endpoint_metrics(method, path);
 
   CREATE TABLE IF NOT EXISTS loadflux_error_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,28 +127,52 @@ db.exec(`
     duration_ms REAL
   );
   CREATE INDEX IF NOT EXISTS idx_error_ts ON loadflux_error_log(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_error_path ON loadflux_error_log(method, path);
 `);
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+if (replace) {
+  db.exec(`
+    DELETE FROM loadflux_system_metrics;
+    DELETE FROM loadflux_process_metrics;
+    DELETE FROM loadflux_endpoint_metrics;
+    DELETE FROM loadflux_error_log;
+  `);
+  console.log("Cleared metric + error tables (--replace).");
+}
+
 const rand = (min, max) => Math.random() * (max - min) + min;
 const randInt = (min, max) => Math.floor(rand(min, max));
 
-// Simulate a daily pattern: higher CPU/traffic during "business hours"
 function dailyMultiplier(hour) {
-  if (hour >= 9 && hour <= 17) return 1.0 + rand(0, 0.5); // peak
-  if (hour >= 6 && hour <= 21) return 0.6 + rand(0, 0.3); // moderate
-  return 0.2 + rand(0, 0.2); // night
+  if (hour >= 9 && hour <= 17) return 1.0 + rand(0, 0.5);
+  if (hour >= 6 && hour <= 21) return 0.6 + rand(0, 0.3);
+  return 0.2 + rand(0, 0.2);
 }
 
-// ── Config ──────────────────────────────────────────────────────────────────
-const DAYS = 30;
-const INTERVAL_MS = 30_000; // one data point every 30 seconds
+const INTERVAL_MS = intervalMinutes * 60 * 1000;
 const NOW = Date.now();
-const START = NOW - DAYS * 24 * 60 * 60 * 1000;
-const TOTAL_POINTS = Math.floor((NOW - START) / INTERVAL_MS);
 
-const MEM_TOTAL = 16 * 1024 * 1024 * 1024; // 16 GB
-const DISK_TOTAL = 500 * 1024 * 1024 * 1024; // 500 GB
+// Calendar span: from local midnight N days ago through NOW (so UI “last 30 days” includes full days)
+const endAnchor = new Date(NOW);
+const startAnchor = new Date(endAnchor);
+startAnchor.setHours(0, 0, 0, 0);
+startAnchor.setDate(startAnchor.getDate() - DAYS);
+const START = startAnchor.getTime();
+const END = NOW;
+
+const timestamps = [];
+for (let t = START; t <= END; t += INTERVAL_MS) {
+  timestamps.push(Math.round(t));
+}
+const lastTs = timestamps[timestamps.length - 1];
+if (lastTs !== undefined && END > lastTs && END - lastTs > INTERVAL_MS / 4) {
+  timestamps.push(END);
+}
+
+const TOTAL_POINTS = timestamps.length;
+
+const MEM_TOTAL = 16 * 1024 * 1024 * 1024;
+const DISK_TOTAL = 500 * 1024 * 1024 * 1024;
 
 const ENDPOINTS = [
   { method: "GET", path: "/" },
@@ -115,7 +184,6 @@ const ENDPOINTS = [
   { method: "GET", path: "/api/notfound" },
 ];
 
-// ── Prepared statements ─────────────────────────────────────────────────────
 const insertSystem = db.prepare(`
   INSERT INTO loadflux_system_metrics
     (timestamp, cpu_percent, mem_total, mem_used, mem_percent,
@@ -145,27 +213,27 @@ const insertError = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 
-// ── Insert in a single transaction for speed ────────────────────────────────
 console.log(
-  `Seeding ${TOTAL_POINTS} data points (${DAYS} days) into ${dbPath} ...`,
+  `Seeding ${TOTAL_POINTS} time buckets (${DAYS} calendar days, every ${intervalMinutes}m) → ${dbPath}`,
+);
+console.log(
+  `  Range: ${new Date(START).toISOString()} … ${new Date(END).toISOString()}`,
 );
 
-let diskUsed = DISK_TOTAL * 0.4; // start at 40% full
+let diskUsed = DISK_TOTAL * 0.4;
 
-const batchInsert = db.transaction(() => {
-  for (let i = 0; i < TOTAL_POINTS; i++) {
-    const ts = START + i * INTERVAL_MS;
+const batchInsert = db.transaction((tsList) => {
+  let i = 0;
+  for (const ts of tsList) {
     const date = new Date(ts);
     const hour = date.getHours();
     const mult = dailyMultiplier(hour);
 
-    // ── System metrics ──────────────────────────────────────────────
     const cpuPercent = Math.min(100, rand(5, 30) * mult);
     const memUsed = MEM_TOTAL * (0.35 + rand(0, 0.25) * mult);
     const memPercent = (memUsed / MEM_TOTAL) * 100;
-    // Disk slowly fills over time
-    diskUsed += rand(0, 50_000);
-    const diskPercent = (diskUsed / DISK_TOTAL) * 100;
+    diskUsed += rand(0, 50_000) * (INTERVAL_MS / (60 * 60 * 1000));
+    const diskPercent = Math.min(100, (diskUsed / DISK_TOTAL) * 100);
 
     insertSystem.run(
       ts,
@@ -176,12 +244,11 @@ const batchInsert = db.transaction(() => {
       DISK_TOTAL,
       Math.floor(diskUsed),
       diskPercent,
-      randInt(1000, 500_000) * mult, // net_rx
-      randInt(500, 200_000) * mult, // net_tx
+      randInt(1000, 500_000) * mult,
+      randInt(500, 200_000) * mult,
     );
 
-    // ── Process metrics ─────────────────────────────────────────────
-    const heapTotal = 150 * 1024 * 1024; // ~150 MB
+    const heapTotal = 150 * 1024 * 1024;
     const heapUsed = heapTotal * (0.4 + rand(0, 0.3) * mult);
     const uptimeSeconds = (ts - START) / 1000;
 
@@ -190,16 +257,17 @@ const batchInsert = db.transaction(() => {
       Math.floor(heapUsed),
       heapTotal,
       randInt(1_000_000, 5_000_000),
-      rand(0.5, 5) * mult, // event_loop_avg
-      rand(2, 50) * mult, // event_loop_max
-      rand(0, 3), // gc_pause
+      rand(0.5, 5) * mult,
+      rand(2, 50) * mult,
+      rand(0, 3),
       uptimeSeconds,
     );
 
-    // ── Endpoint metrics (one row per endpoint per interval) ────────
     for (const ep of ENDPOINTS) {
-      const reqCount = Math.floor(rand(1, 20) * mult);
-      if (reqCount === 0) continue;
+      const reqCount = Math.max(
+        1,
+        Math.floor(rand(1, 120) * mult * (intervalMinutes / 60)),
+      );
 
       const isError = ep.path === "/api/error";
       const isNotFound = ep.path === "/api/notfound";
@@ -252,34 +320,44 @@ const batchInsert = db.transaction(() => {
         s5xx,
       );
 
-      // ── Error log entries ───────────────────────────────────────
       if (errorCount > 0 && (isError || isNotFound)) {
-        insertError.run(
-          ts,
-          ep.method,
-          ep.path,
-          isError ? 500 : 404,
-          isError ? "Internal Server Error" : "Not Found",
-          isError
-            ? "Error: Something went wrong\n    at handler (/app/routes.js:42:11)"
-            : null,
-          avgDur,
+        const perLog = Math.min(
+          errorCount,
+          isError ? randInt(1, 4) : randInt(1, 3),
         );
+        for (let k = 0; k < perLog; k++) {
+          insertError.run(
+            ts + k,
+            ep.method,
+            ep.path,
+            isError ? 500 : 404,
+            isError ? "Internal Server Error" : "Not Found",
+            isError
+              ? "Error: Something went wrong\n    at handler (/app/routes.js:42:11)"
+              : null,
+            avgDur,
+          );
+        }
       }
     }
 
-    // Progress every 10%
-    if (i > 0 && i % Math.floor(TOTAL_POINTS / 10) === 0) {
-      const pct = Math.round((i / TOTAL_POINTS) * 100);
-      process.stdout.write(`  ${pct}%...`);
+    i++;
+    const step = Math.max(1, Math.floor(tsList.length / 10));
+    if (i % step === 0) {
+      process.stdout.write(`  ${Math.round((i / tsList.length) * 100)}%...`);
     }
   }
 });
 
-batchInsert();
+batchInsert(timestamps);
 
 console.log("\nDone!");
 
+const rangeRow = db
+  .prepare(
+    `SELECT MIN(timestamp) as lo, MAX(timestamp) as hi FROM loadflux_system_metrics`,
+  )
+  .get();
 const systemCount = db
   .prepare("SELECT COUNT(*) as c FROM loadflux_system_metrics")
   .get();
@@ -298,6 +376,17 @@ console.log(`  System metrics:   ${systemCount.c.toLocaleString()}`);
 console.log(`  Process metrics:  ${processCount.c.toLocaleString()}`);
 console.log(`  Endpoint metrics: ${endpointCount.c.toLocaleString()}`);
 console.log(`  Error log:        ${errorCount.c.toLocaleString()}`);
-console.log(`\nNow start the test server: node examples/test-server.mjs`);
+if (rangeRow?.lo != null) {
+  console.log(`\nSystem metric time span in DB:`);
+  console.log(
+    `  ${new Date(rangeRow.lo).toISOString()} … ${new Date(rangeRow.hi).toISOString()}`,
+  );
+}
+console.log(
+  `\nIn the dashboard: open Time range, set From/To across this window (e.g. last ${DAYS} days) and Apply.`,
+);
+console.log(
+  `Start test server: node examples/test-server.mjs (uses cwd ./loadflux.db unless configured)\n`,
+);
 
 db.close();

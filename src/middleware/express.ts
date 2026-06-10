@@ -2,21 +2,14 @@ import type { Request, Response, NextFunction } from "express";
 import type { MiddlewareContext } from "./types.js";
 import { createApiHandler } from "../api/router.js";
 import { createStaticHandler, tryServeAsset } from "../server/static.js";
+import { createRouteExcluder } from "./route-exclude.js";
 
 export function createExpressMiddleware(ctx: MiddlewareContext) {
   const { config, metricsStore } = ctx;
   const basePath = config.path;
   const apiHandler = createApiHandler(ctx);
   const staticHandler = createStaticHandler(basePath);
-  const excludeSet = new Set(config.excludeRoutes);
-  const excludePrefixes = config.excludeRoutes
-    .filter((route) => route.endsWith("*"))
-    .map((route) => route.replace(/\/\*+$/, ""));
-
-  const isExcluded = (path: string): boolean => {
-    if (excludeSet.has(path)) return true;
-    return excludePrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
-  };
+  const isExcluded = createRouteExcluder(config.excludeRoutes);
 
   return function loadfluxMiddleware(
     req: Request,

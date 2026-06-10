@@ -1,81 +1,76 @@
 import { useState, useCallback, useEffect } from "react";
 import {
+  fetchErrorStatusCodes,
   fetchErrorsPaginated,
   fetchStatusDistribution,
   type ErrorLogRow,
-  type PaginatedResponse,
 } from "../api/client";
-import { useTimeRange, usePolledData } from "../hooks/useMetrics";
+import { useTimeRange, usePolledData, usePaginatedPolledData } from "../hooks/useMetrics";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { DoughnutChart } from "../components/charts/DoughnutChart";
 import { MetricsTable } from "../components/tables/MetricsTable";
 import { StatCard } from "../components/cards/StatCard";
 import { Pagination } from "../components/Pagination";
-
-function formatTime(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function usePaginatedPolledData<T>(
-  fetcher: (from: number, to: number, page: number, limit: number) => Promise<PaginatedResponse<T>>,
-  rangeMs: number,
-  page: number,
-  limit = 200,
-  intervalMs = 10000,
-) {
-  const [data, setData] = useState<PaginatedResponse<T> | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(async () => {
-    try {
-      const now = Date.now();
-      const result = await fetcher(now - rangeMs, now, page, limit);
-      setData(result);
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AuthError") throw err;
-    } finally {
-      setLoading(false);
-    }
-  }, [fetcher, rangeMs, page, limit]);
-
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, intervalMs);
-    return () => clearInterval(id);
-  }, [refresh, intervalMs]);
-
-  return { data, loading, refresh };
-}
+import { IconChevronDown, IconFilter, IconSearch } from "../components/icons";
+import { formatTime } from "../utils/format";
 
 export function Errors() {
-  const { rangeMs, setRangeMs } = useTimeRange();
+  const {
+    range,
+    rangeSyncToken,
+    getRange,
+    setCustomRange,
+    resetToDefault,
+    isDefaultLastHour,
+  } = useTimeRange();
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const [statusFilter, setStatusFilter] = useState("all");
   const [errorPage, setErrorPage] = useState(1);
   const [errorLimit, setErrorLimit] = useState(200);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  const { data: statusCodesData } = usePolledData(
+    async (from, to) => {
+      const { codes } = await fetchErrorStatusCodes(from, to);
+      return Array.isArray(codes) ? codes : [];
+    },
+    getRange,
+  );
+  const statusCodes = statusCodesData ?? [];
+
+  useEffect(() => {
+    if (statusFilter === "all") return;
+    const n = parseInt(statusFilter, 10);
+    if (!Number.isFinite(n) || !statusCodes.includes(n)) {
+      setStatusFilter("all");
+    }
+  }, [statusCodes, statusFilter]);
+
   // Reset page when time range changes
   useEffect(() => {
     setErrorPage(1);
-  }, [rangeMs]);
+  }, [rangeSyncToken, debouncedSearch, statusFilter]);
 
   const handleErrorLimitChange = useCallback((newLimit: number) => {
     setErrorLimit(newLimit);
     setErrorPage(1);
   }, []);
 
+  const paginatedErrorFetcher = useCallback(
+    (from: number, to: number, page: number, limit: number) =>
+      fetchErrorsPaginated(from, to, page, limit, debouncedSearch, statusFilter),
+    [debouncedSearch, statusFilter],
+  );
+
   const { data: errorsPaginated } = usePaginatedPolledData(
-    fetchErrorsPaginated,
-    rangeMs,
+    paginatedErrorFetcher,
+    getRange,
     errorPage,
     errorLimit,
   );
-  const { data: distribution } = usePolledData(fetchStatusDistribution, rangeMs);
+  const { data: distribution } = usePolledData(fetchStatusDistribution, getRange);
 
   const errorList = errorsPaginated?.data ?? [];
   const totalErrors = errorsPaginated?.pagination?.total ?? 0;
@@ -84,9 +79,53 @@ export function Errors() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col gap-3">
         <h1 className="text-2xl font-bold">Errors</h1>
-        <TimeRangeSelector value={rangeMs} onChange={setRangeMs} />
+        <div className="flex flex-col lg:flex-row lg:items-center gap-2 lg:gap-3">
+          <div className="flex flex-1 flex-wrap items-center gap-2 min-w-0">
+            <div className="relative flex-1 min-w-[200px] max-w-md">
+              <IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search…"
+                aria-label="Search errors"
+                className="w-full text-sm pl-9 pr-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <div className="relative shrink-0">
+              <IconFilter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none z-[1]" />
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                aria-label="Filter by HTTP status"
+                title={
+                  statusCodes.length === 0
+                    ? "No error rows in this range — only “All statuses” applies"
+                    : "Filter by response status"
+                }
+                className="text-sm pl-9 pr-8 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none appearance-none focus:ring-1 focus:ring-blue-500 min-w-[7.5rem] cursor-pointer"
+              >
+                <option value="all">All statuses</option>
+                {statusCodes.map((code) => (
+                  <option key={code} value={String(code)}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+              <IconChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            </div>
+          </div>
+          <div className="shrink-0 lg:ml-auto">
+            <TimeRangeSelector
+              range={range}
+              rangeSyncToken={rangeSyncToken}
+              isDefaultLastHour={isDefaultLastHour}
+              onApply={setCustomRange}
+              onResetDefault={resetToDefault}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Summary */}

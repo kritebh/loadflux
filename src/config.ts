@@ -34,6 +34,17 @@ export function resolveConfig(
     connectionString = DEFAULTS.database.connectionString;
   }
 
+  const listenHost =
+    userConfig.listenHost?.trim() ||
+    process.env.LOADFLUX_LISTEN_HOST?.trim() ||
+    process.env.HOST?.trim() ||
+    null;
+
+  const trustProxy =
+    userConfig.trustProxy !== undefined
+      ? !!userConfig.trustProxy
+      : /^1|true|yes$/i.test(process.env.LOADFLUX_TRUST_PROXY?.trim() ?? "");
+
   const resolved: ResolvedConfig = {
     path: normalizePath(userConfig.path ?? DEFAULTS.path),
     framework: userConfig.framework ?? DEFAULTS.framework,
@@ -59,6 +70,9 @@ export function resolveConfig(
     slowRequestThreshold:
       userConfig.slowRequestThreshold ?? DEFAULTS.slowRequestThreshold,
     excludeRoutes: userConfig.excludeRoutes ?? DEFAULTS.excludeRoutes,
+    disableOnLocalhost: userConfig.disableOnLocalhost ?? false,
+    listenHost,
+    trustProxy,
   };
 
   validate(resolved);

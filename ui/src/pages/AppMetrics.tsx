@@ -1,59 +1,82 @@
+import { useMemo } from "react";
 import { fetchProcessMetrics } from "../api/client";
 import { useTimeRange, usePolledData } from "../hooks/useMetrics";
-import { useSSE } from "../hooks/useSSE";
 import { TimeRangeSelector } from "../components/TimeRangeSelector";
 import { TimeSeriesChart } from "../components/charts/TimeSeriesChart";
 import { StatCard } from "../components/cards/StatCard";
+import { formatBytes, formatTimeLabel, formatUptime } from "../utils/format";
 
-function formatTimeLabel(ts: number, rangeMs: number): string {
-  const d = new Date(ts);
-  const DAY = 24 * 60 * 60 * 1000;
-  if (rangeMs <= DAY) {
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
-  if (rangeMs <= 7 * DAY) {
-    return (
-      d.toLocaleDateString([], { month: "short", day: "numeric" }) +
-      " " +
-      d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    );
-  }
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function downsample<T>(data: T[], maxPoints = 500): T[] {
-  if (data.length <= maxPoints) return data;
-  const step = data.length / maxPoints;
-  const result: T[] = [];
-  for (let i = 0; i < maxPoints; i++) {
-    result.push(data[Math.floor(i * step)]);
-  }
-  result[result.length - 1] = data[data.length - 1];
-  return result;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  return `${m}m ${s}s`;
-}
+const MAX_CHART_POINTS = 280;
 
 export function AppMetrics() {
-  const { rangeMs, setRangeMs } = useTimeRange();
-  const { data, loading } = usePolledData(fetchProcessMetrics, rangeMs);
-  const { snapshot } = useSSE();
+  const {
+    range,
+    rangeSyncToken,
+    getRange,
+    setCustomRange,
+    resetToDefault,
+    isDefaultLastHour,
+  } = useTimeRange();
+  const { data, loading } = usePolledData(
+    (from, to) => fetchProcessMetrics(from, to, MAX_CHART_POINTS),
+    getRange,
+  );
+  const metrics = data ?? [];
+  const rangeMs = range.to - range.from;
+  const chartMetrics = metrics;
+  const labels = useMemo(
+    () => chartMetrics.map((m) => formatTimeLabel(m.timestamp, rangeMs)),
+    [chartMetrics, rangeMs],
+  );
+  const latest = metrics[metrics.length - 1];
+
+  const heapUsedData = useMemo(
+    () => chartMetrics.map((m) => m.heap_used / (1024 * 1024)),
+    [chartMetrics],
+  );
+  const heapTotalData = useMemo(
+    () => chartMetrics.map((m) => m.heap_total / (1024 * 1024)),
+    [chartMetrics],
+  );
+  const eventLoopAvgData = useMemo(
+    () => chartMetrics.map((m) => m.event_loop_avg_ms),
+    [chartMetrics],
+  );
+  const eventLoopMaxData = useMemo(
+    () => chartMetrics.map((m) => m.event_loop_max_ms),
+    [chartMetrics],
+  );
+  const gcPauseData = useMemo(
+    () => chartMetrics.map((m) => m.gc_pause_ms),
+    [chartMetrics],
+  );
+  const externalMemData = useMemo(
+    () => chartMetrics.map((m) => m.external_mem / (1024 * 1024)),
+    [chartMetrics],
+  );
+
+  const heapDatasets = useMemo(
+    () => [
+      { label: "Heap Used", data: heapUsedData, color: "#06b6d4", fill: true },
+      { label: "Heap Total", data: heapTotalData, color: "#6b728080" },
+    ],
+    [heapUsedData, heapTotalData],
+  );
+  const eventLoopDatasets = useMemo(
+    () => [
+      { label: "Avg", data: eventLoopAvgData, color: "#10b981" },
+      { label: "Max", data: eventLoopMaxData, color: "#ef4444" },
+    ],
+    [eventLoopAvgData, eventLoopMaxData],
+  );
+  const gcDatasets = useMemo(
+    () => [{ label: "GC Pause", data: gcPauseData, color: "#f59e0b", fill: true }],
+    [gcPauseData],
+  );
+  const externalDatasets = useMemo(
+    () => [{ label: "External", data: externalMemData, color: "#8b5cf6", fill: true }],
+    [externalMemData],
+  );
 
   if (loading && !data) {
     return (
@@ -63,16 +86,19 @@ export function AppMetrics() {
     );
   }
 
-  const metrics = data ?? [];
-  const sampled = downsample(metrics);
-  const labels = sampled.map((m) => formatTimeLabel(m.timestamp, rangeMs));
-  const latest = metrics[metrics.length - 1];
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <h1 className="text-2xl font-bold">App Metrics</h1>
-        <TimeRangeSelector value={rangeMs} onChange={setRangeMs} />
+        <div className="shrink-0 sm:ml-auto">
+          <TimeRangeSelector
+            range={range}
+            rangeSyncToken={rangeSyncToken}
+            isDefaultLastHour={isDefaultLastHour}
+            onApply={setCustomRange}
+            onResetDefault={resetToDefault}
+          />
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -96,7 +122,9 @@ export function AppMetrics() {
           />
           <StatCard
             title="Uptime"
-            value={formatUptime(snapshot?.process.uptime_seconds ?? latest.uptime_seconds)}
+            value={formatUptime(latest.uptime_seconds, {
+              showSeconds: true,
+            })}
             color="emerald"
           />
         </div>
@@ -110,19 +138,7 @@ export function AppMetrics() {
           </h3>
           <TimeSeriesChart
             labels={labels}
-            datasets={[
-              {
-                label: "Heap Used",
-                data: sampled.map((m) => m.heap_used / (1024 * 1024)),
-                color: "#06b6d4",
-                fill: true,
-              },
-              {
-                label: "Heap Total",
-                data: sampled.map((m) => m.heap_total / (1024 * 1024)),
-                color: "#6b728080",
-              },
-            ]}
+            datasets={heapDatasets}
             yLabel="MB"
           />
         </div>
@@ -134,18 +150,7 @@ export function AppMetrics() {
           </h3>
           <TimeSeriesChart
             labels={labels}
-            datasets={[
-              {
-                label: "Avg",
-                data: sampled.map((m) => m.event_loop_avg_ms),
-                color: "#10b981",
-              },
-              {
-                label: "Max",
-                data: sampled.map((m) => m.event_loop_max_ms),
-                color: "#ef4444",
-              },
-            ]}
+            datasets={eventLoopDatasets}
             yLabel="ms"
           />
         </div>
@@ -157,14 +162,7 @@ export function AppMetrics() {
           </h3>
           <TimeSeriesChart
             labels={labels}
-            datasets={[
-              {
-                label: "GC Pause",
-                data: sampled.map((m) => m.gc_pause_ms),
-                color: "#f59e0b",
-                fill: true,
-              },
-            ]}
+            datasets={gcDatasets}
             yLabel="ms"
           />
         </div>
@@ -176,14 +174,7 @@ export function AppMetrics() {
           </h3>
           <TimeSeriesChart
             labels={labels}
-            datasets={[
-              {
-                label: "External",
-                data: sampled.map((m) => m.external_mem / (1024 * 1024)),
-                color: "#8b5cf6",
-                fill: true,
-              },
-            ]}
+            datasets={externalDatasets}
             yLabel="MB"
           />
         </div>

@@ -14,8 +14,8 @@ import {
   Filler,
 } from "chart.js";
 import { useTheme } from "./hooks/useTheme";
-import { useSSEProvider, SSEContext } from "./hooks/useSSE";
-import { checkAuthStatus, getAppBasePath, AuthError } from "./api/client";
+import { useSSEConnectionProvider, SSEConnectionContext } from "./hooks/useSSE";
+import { checkAuthStatus, getAppBasePath } from "./api/client";
 import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
@@ -42,17 +42,17 @@ type AuthState = "loading" | "login" | "setup" | "authenticated";
 
 function AuthenticatedApp() {
   const { theme, toggle } = useTheme();
-  const sseState = useSSEProvider();
+  const { connected } = useSSEConnectionProvider();
 
   return (
-    <SSEContext.Provider value={sseState}>
+    <SSEConnectionContext.Provider value={{ connected }}>
       <Routes>
         <Route
           element={
             <Layout
               theme={theme}
               toggleTheme={toggle}
-              connected={sseState.connected}
+              connected={connected}
             />
           }
         >
@@ -65,7 +65,7 @@ function AuthenticatedApp() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
-    </SSEContext.Provider>
+    </SSEConnectionContext.Provider>
   );
 }
 
@@ -75,14 +75,17 @@ export function App() {
   useEffect(() => {
     checkAuthStatus()
       .then((res) => {
-        setAuthState(res.configured ? "authenticated" : "setup");
-      })
-      .catch((err) => {
-        if (err instanceof AuthError) {
-          setAuthState("login");
-        } else {
+        if (!res.configured) {
+          setAuthState("setup");
+        } else if (res.authenticated) {
           setAuthState("authenticated");
+        } else {
+          setAuthState("login");
         }
+      })
+      .catch(() => {
+        // Network / server errors — do not open the dashboard without a verified session
+        setAuthState("login");
       });
   }, []);
 

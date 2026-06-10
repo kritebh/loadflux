@@ -1,34 +1,83 @@
+import { useMemo } from "react";
 import { useSSE } from "../hooks/useSSE";
 import { StatCard } from "../components/cards/StatCard";
 import { GaugeChart } from "../components/charts/GaugeChart";
 import { MetricsTable } from "../components/tables/MetricsTable";
 import type { TopEndpointRow } from "../api/client";
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1) return `${(ms * 1000).toFixed(0)}us`;
-  if (ms < 1000) return `${ms.toFixed(1)}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
-}
+import { formatBytes, formatDuration, formatUptime } from "../utils/format";
 
 export function Dashboard() {
   const { snapshot } = useSSE();
+
+  const topByRequestsColumns = useMemo(
+    () => [
+      {
+        key: "endpoint",
+        header: "Endpoint",
+        render: (r: TopEndpointRow) => (
+          <span className="font-mono text-xs">
+            <span className="text-blue-500 font-semibold">{r.method}</span>{" "}
+            {r.path}
+          </span>
+        ),
+      },
+      {
+        key: "value",
+        header: "Reqs",
+        align: "right" as const,
+        render: (r: TopEndpointRow) => r.value.toLocaleString(),
+      },
+    ],
+    [],
+  );
+
+  const topByLatencyColumns = useMemo(
+    () => [
+      {
+        key: "endpoint",
+        header: "Endpoint",
+        render: (r: TopEndpointRow) => (
+          <span className="font-mono text-xs">
+            <span className="text-blue-500 font-semibold">{r.method}</span>{" "}
+            {r.path}
+          </span>
+        ),
+      },
+      {
+        key: "value",
+        header: "P95",
+        align: "right" as const,
+        render: (r: TopEndpointRow) => formatDuration(r.value),
+      },
+    ],
+    [],
+  );
+
+  const topByErrorsColumns = useMemo(
+    () => [
+      {
+        key: "endpoint",
+        header: "Endpoint",
+        render: (r: TopEndpointRow) => (
+          <span className="font-mono text-xs">
+            <span className="text-blue-500 font-semibold">{r.method}</span>{" "}
+            {r.path}
+          </span>
+        ),
+      },
+      {
+        key: "value",
+        header: "Err %",
+        align: "right" as const,
+        render: (r: TopEndpointRow) => (
+          <span className={r.value > 0 ? "text-red-500" : ""}>
+            {r.value.toFixed(1)}%
+          </span>
+        ),
+      },
+    ],
+    [],
+  );
 
   if (!snapshot) {
     return (
@@ -159,24 +208,7 @@ export function Dashboard() {
             Top Endpoints (1h)
           </h3>
           <MetricsTable<TopEndpointRow>
-            columns={[
-              {
-                key: "endpoint",
-                header: "Endpoint",
-                render: (r) => (
-                  <span className="font-mono text-xs">
-                    <span className="text-blue-500 font-semibold">{r.method}</span>{" "}
-                    {r.path}
-                  </span>
-                ),
-              },
-              {
-                key: "value",
-                header: "Reqs",
-                align: "right",
-                render: (r) => r.value.toLocaleString(),
-              },
-            ]}
+            columns={topByRequestsColumns}
             data={endpoints.top_by_requests}
             keyExtractor={(r) => `${r.method}:${r.path}`}
             emptyMessage="No traffic yet"
@@ -188,24 +220,7 @@ export function Dashboard() {
             Slowest Endpoints - P95 (1h)
           </h3>
           <MetricsTable<TopEndpointRow>
-            columns={[
-              {
-                key: "endpoint",
-                header: "Endpoint",
-                render: (r) => (
-                  <span className="font-mono text-xs">
-                    <span className="text-blue-500 font-semibold">{r.method}</span>{" "}
-                    {r.path}
-                  </span>
-                ),
-              },
-              {
-                key: "value",
-                header: "P95",
-                align: "right",
-                render: (r) => formatDuration(r.value),
-              },
-            ]}
+            columns={topByLatencyColumns}
             data={endpoints.top_by_latency}
             keyExtractor={(r) => `${r.method}:${r.path}`}
             emptyMessage="No traffic yet"
@@ -217,28 +232,7 @@ export function Dashboard() {
             Highest Error Rate (1h)
           </h3>
           <MetricsTable<TopEndpointRow>
-            columns={[
-              {
-                key: "endpoint",
-                header: "Endpoint",
-                render: (r) => (
-                  <span className="font-mono text-xs">
-                    <span className="text-blue-500 font-semibold">{r.method}</span>{" "}
-                    {r.path}
-                  </span>
-                ),
-              },
-              {
-                key: "value",
-                header: "Err %",
-                align: "right",
-                render: (r) => (
-                  <span className={r.value > 0 ? "text-red-500" : ""}>
-                    {r.value.toFixed(1)}%
-                  </span>
-                ),
-              },
-            ]}
+            columns={topByErrorsColumns}
             data={endpoints.top_by_errors}
             keyExtractor={(r) => `${r.method}:${r.path}`}
             emptyMessage="No errors"

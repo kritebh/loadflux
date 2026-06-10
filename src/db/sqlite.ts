@@ -12,6 +12,7 @@ import type {
   OverviewMetrics,
   PaginationParams,
   PaginatedResult,
+  QueryFilter,
 } from "../types.js";
 import {
   TABLE_SYSTEM_METRICS,
@@ -25,6 +26,12 @@ import {
   buildPaginatedResult,
 } from "./constants.js";
 import { logDbError } from "./utils.js";
+import {
+  ensureSampleSize,
+  escapeLike,
+  normalizeSearchTerm,
+  parseStatusFilter as parseStatusFilterBase,
+} from "./query-helpers.js";
 
 // Migrations embedded as code (tsup bundles everything — no filesystem reads)
 const MIGRATIONS: { version: number; sql: string }[] = [
@@ -107,6 +114,27 @@ CREATE TABLE IF NOT EXISTS ${TABLE_AUTH} (
   // Future migrations go here:
   // { version: 2, sql: `ALTER TABLE ...` },
 ];
+
+const LIKE_ESCAPE = " ESCAPE '\\'";
+
+function normalizedSearch(search?: string): string | null {
+  const term = normalizeSearchTerm(search);
+  if (!term) return null;
+  return `%${escapeLike(term.toLowerCase())}%`;
+}
+
+function numberOrNull(value: number | null): number | null {
+  return value === null ? null : Math.round(value);
+}
+
+function parseStatusFilter(status?: string): { clause: string; params: number[] } {
+  const filter = parseStatusFilterBase(status);
+  if (filter.kind === "all") return { clause: "", params: [] };
+  if (filter.kind === "range") {
+    return { clause: "AND status_code BETWEEN ? AND ?", params: [filter.min, filter.max] };
+  }
+  return { clause: "AND status_code = ?", params: [filter.code] };
+}
 
 export class SQLiteAdapter implements DatabaseAdapter {
   private db!: Database.Database;
@@ -373,30 +401,185 @@ export class SQLiteAdapter implements DatabaseAdapter {
     }
   }
 
+  insertErrorsBatch(errors: ErrorLogRow[]): void {
+    if (errors.length === 0) return;
+    try {
+      const batchInsert = this.db.transaction((rows: ErrorLogRow[]) => {
+        for (const e of rows) {
+          this.stmts.insertError.run(
+            e.timestamp,
+            e.method,
+            e.path,
+            e.status_code,
+            e.error_msg,
+            e.stack_trace,
+            e.duration_ms,
+          );
+        }
+      });
+      batchInsert(errors);
+    } catch (err) {
+      logDbError("SQLite insertErrorsBatch", err);
+    }
+  }
+
+  insertSystemAndProcessMetrics(
+    system: SystemMetricRow,
+    process: ProcessMetricRow,
+  ): void {
+    try {
+      const insert = this.db.transaction(() => {
+        this.stmts.insertSystem.run(
+          system.timestamp,
+          system.cpu_percent,
+          system.mem_total,
+          system.mem_used,
+          system.mem_percent,
+          system.disk_total,
+          system.disk_used,
+          system.disk_percent,
+          system.net_rx_bytes,
+          system.net_tx_bytes,
+        );
+        this.stmts.insertProcess.run(
+          process.timestamp,
+          process.heap_used,
+          process.heap_total,
+          process.external_mem,
+          process.event_loop_avg_ms,
+          process.event_loop_max_ms,
+          process.gc_pause_ms,
+          process.uptime_seconds,
+        );
+      });
+      insert();
+    } catch (err) {
+      logDbError("SQLite insertSystemAndProcessMetrics", err);
+    }
+  }
+
   // ─── Queries ────────────────────────────────────────────────────────────
 
-  async getSystemMetrics(range: TimeRange): Promise<SystemMetricRow[]> {
-    return this.stmts.getSystem.all(range.from, range.to) as SystemMetricRow[];
+  async getSystemMetrics(
+    range: TimeRange,
+    maxPoints?: number,
+  ): Promise<SystemMetricRow[]> {
+    const sampleSize = ensureSampleSize(maxPoints);
+    if (!sampleSize) {
+      return this.stmts.getSystem.all(range.from, range.to) as SystemMetricRow[];
+    }
+
+    const span = Math.max(range.to - range.from, 1);
+    const bucketMs = Math.max(Math.floor(span / sampleSize), 1);
+    const sql = `
+      SELECT
+        MAX(timestamp) as timestamp,
+        AVG(cpu_percent) as cpu_percent,
+        AVG(mem_total) as mem_total,
+        AVG(mem_used) as mem_used,
+        AVG(mem_percent) as mem_percent,
+        AVG(disk_total) as disk_total,
+        AVG(disk_used) as disk_used,
+        AVG(disk_percent) as disk_percent,
+        AVG(net_rx_bytes) as net_rx_bytes,
+        AVG(net_tx_bytes) as net_tx_bytes
+      FROM ${TABLE_SYSTEM_METRICS}
+      WHERE timestamp BETWEEN ? AND ?
+      GROUP BY CAST((timestamp - ?) / ? AS INTEGER)
+      ORDER BY timestamp ASC
+    `;
+    const rows = this.db
+      .prepare(sql)
+      .all(range.from, range.to, range.from, bucketMs) as Array<
+      Omit<SystemMetricRow, "mem_total" | "mem_used" | "net_rx_bytes" | "net_tx_bytes"> & {
+        mem_total: number;
+        mem_used: number;
+        net_rx_bytes: number;
+        net_tx_bytes: number;
+      }
+    >;
+    return rows.map((row) => ({
+      ...row,
+      mem_total: Math.round(row.mem_total),
+      mem_used: Math.round(row.mem_used),
+      disk_total: numberOrNull(row.disk_total),
+      disk_used: numberOrNull(row.disk_used),
+      net_rx_bytes: Math.round(row.net_rx_bytes),
+      net_tx_bytes: Math.round(row.net_tx_bytes),
+    }));
   }
 
-  async getProcessMetrics(range: TimeRange): Promise<ProcessMetricRow[]> {
-    return this.stmts.getProcess.all(
-      range.from,
-      range.to,
-    ) as ProcessMetricRow[];
+  async getProcessMetrics(
+    range: TimeRange,
+    maxPoints?: number,
+  ): Promise<ProcessMetricRow[]> {
+    const sampleSize = ensureSampleSize(maxPoints);
+    if (!sampleSize) {
+      return this.stmts.getProcess.all(
+        range.from,
+        range.to,
+      ) as ProcessMetricRow[];
+    }
+
+    const span = Math.max(range.to - range.from, 1);
+    const bucketMs = Math.max(Math.floor(span / sampleSize), 1);
+    const sql = `
+      SELECT
+        MAX(timestamp) as timestamp,
+        AVG(heap_used) as heap_used,
+        AVG(heap_total) as heap_total,
+        AVG(external_mem) as external_mem,
+        AVG(event_loop_avg_ms) as event_loop_avg_ms,
+        AVG(event_loop_max_ms) as event_loop_max_ms,
+        AVG(gc_pause_ms) as gc_pause_ms,
+        AVG(uptime_seconds) as uptime_seconds
+      FROM ${TABLE_PROCESS_METRICS}
+      WHERE timestamp BETWEEN ? AND ?
+      GROUP BY CAST((timestamp - ?) / ? AS INTEGER)
+      ORDER BY timestamp ASC
+    `;
+    const rows = this.db
+      .prepare(sql)
+      .all(range.from, range.to, range.from, bucketMs) as Array<
+      Omit<ProcessMetricRow, "heap_used" | "heap_total" | "external_mem"> & {
+        heap_used: number;
+        heap_total: number;
+        external_mem: number;
+      }
+    >;
+    return rows.map((row) => ({
+      ...row,
+      heap_used: Math.round(row.heap_used),
+      heap_total: Math.round(row.heap_total),
+      external_mem: Math.round(row.external_mem),
+    }));
   }
 
-  async getEndpointMetrics(range: TimeRange): Promise<EndpointMetricRow[]> {
-    return this.stmts.getEndpoints.all(
-      range.from,
-      range.to,
-    ) as EndpointMetricRow[];
+  async getEndpointMetrics(
+    range: TimeRange,
+    filter?: QueryFilter,
+  ): Promise<EndpointMetricRow[]> {
+    const search = normalizedSearch(filter?.search);
+    if (!search) {
+      return this.stmts.getEndpoints.all(
+        range.from,
+        range.to,
+      ) as EndpointMetricRow[];
+    }
+    const sql = `
+      SELECT * FROM ${TABLE_ENDPOINT_METRICS}
+      WHERE timestamp BETWEEN ? AND ?
+        AND (LOWER(method) LIKE ?${LIKE_ESCAPE} OR LOWER(path) LIKE ?${LIKE_ESCAPE})
+      ORDER BY timestamp ASC
+    `;
+    return this.db.prepare(sql).all(range.from, range.to, search, search) as EndpointMetricRow[];
   }
 
   async getTopEndpoints(
     metric: TopEndpointMetric,
     limit: number,
     range: TimeRange,
+    filter?: QueryFilter,
   ): Promise<TopEndpointRow[]> {
     let orderExpr: string;
     switch (metric) {
@@ -418,35 +601,100 @@ export class SQLiteAdapter implements DatabaseAdapter {
         break;
     }
 
+    const search = normalizedSearch(filter?.search);
+    const whereFilter = search
+      ? `AND (LOWER(method) LIKE ?${LIKE_ESCAPE} OR LOWER(path) LIKE ?${LIKE_ESCAPE})`
+      : "";
     const sql = `
       SELECT method, path, ${orderExpr} as value
-      FROM loadflux_endpoint_metrics
+      FROM ${TABLE_ENDPOINT_METRICS}
       WHERE timestamp BETWEEN ? AND ?
+      ${whereFilter}
       GROUP BY method, path
       ORDER BY value DESC
       LIMIT ?
     `;
-    return this.db
-      .prepare(sql)
-      .all(range.from, range.to, limit) as TopEndpointRow[];
+    const params = search
+      ? [range.from, range.to, search, search, limit]
+      : [range.from, range.to, limit];
+    return this.db.prepare(sql).all(...params) as TopEndpointRow[];
   }
 
   async getSlowRequests(
     thresholdMs: number,
     range: TimeRange,
+    filter?: QueryFilter,
   ): Promise<EndpointMetricRow[]> {
+    const search = normalizedSearch(filter?.search);
+    const whereFilter = search
+      ? `AND (LOWER(method) LIKE ?${LIKE_ESCAPE} OR LOWER(path) LIKE ?${LIKE_ESCAPE})`
+      : "";
     const sql = `
-      SELECT * FROM loadflux_endpoint_metrics
+      SELECT * FROM ${TABLE_ENDPOINT_METRICS}
       WHERE timestamp BETWEEN ? AND ? AND avg_duration > ?
+      ${whereFilter}
       ORDER BY avg_duration DESC
+    `;
+    const params = search
+      ? [range.from, range.to, thresholdMs, search, search]
+      : [range.from, range.to, thresholdMs];
+    return this.db.prepare(sql).all(...params) as EndpointMetricRow[];
+  }
+
+  async getErrorLog(
+    range: TimeRange,
+    filter?: QueryFilter,
+  ): Promise<ErrorLogRow[]> {
+    const search = normalizedSearch(filter?.search);
+    const status = parseStatusFilter(filter?.status);
+    if (!search) {
+      if (!status.clause) {
+        return this.stmts.getErrors.all(range.from, range.to) as ErrorLogRow[];
+      }
+      const sql = `
+        SELECT * FROM ${TABLE_ERROR_LOG}
+        WHERE timestamp BETWEEN ? AND ?
+        ${status.clause}
+        ORDER BY timestamp DESC
+      `;
+      return this.db
+        .prepare(sql)
+        .all(range.from, range.to, ...status.params) as ErrorLogRow[];
+    }
+    const sql = `
+      SELECT * FROM ${TABLE_ERROR_LOG}
+      WHERE timestamp BETWEEN ? AND ?
+        ${status.clause}
+        AND (
+          LOWER(method) LIKE ?${LIKE_ESCAPE}
+          OR LOWER(path) LIKE ?${LIKE_ESCAPE}
+          OR LOWER(COALESCE(error_msg, '')) LIKE ?${LIKE_ESCAPE}
+        )
+      ORDER BY timestamp DESC
     `;
     return this.db
       .prepare(sql)
-      .all(range.from, range.to, thresholdMs) as EndpointMetricRow[];
+      .all(
+        range.from,
+        range.to,
+        ...status.params,
+        search,
+        search,
+        search,
+      ) as ErrorLogRow[];
   }
 
-  async getErrorLog(range: TimeRange): Promise<ErrorLogRow[]> {
-    return this.stmts.getErrors.all(range.from, range.to) as ErrorLogRow[];
+  async getErrorStatusCodes(range: TimeRange): Promise<number[]> {
+    const sql = `
+      SELECT DISTINCT status_code as code
+      FROM ${TABLE_ERROR_LOG}
+      WHERE timestamp BETWEEN ? AND ?
+      ORDER BY status_code ASC
+    `;
+    const rows = this.db
+      .prepare(sql)
+      .all(range.from, range.to) as { code: number }[];
+    return rows.map((r) => r.code);
   }
 
   async getStatusDistribution(range: TimeRange): Promise<StatusDistribution> {
@@ -496,6 +744,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
   async getSystemMetricsPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    _maxPoints?: number,
   ): Promise<PaginatedResult<SystemMetricRow>> {
     const { count } = this.stmts.countSystem.get(range.from, range.to) as { count: number };
     const offset = (pagination.page - 1) * pagination.limit;
@@ -508,6 +757,7 @@ export class SQLiteAdapter implements DatabaseAdapter {
   async getProcessMetricsPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    _maxPoints?: number,
   ): Promise<PaginatedResult<ProcessMetricRow>> {
     const { count } = this.stmts.countProcess.get(range.from, range.to) as { count: number };
     const offset = (pagination.page - 1) * pagination.limit;
@@ -520,12 +770,24 @@ export class SQLiteAdapter implements DatabaseAdapter {
   async getEndpointMetricsPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<EndpointMetricRow>> {
-    const { count } = this.stmts.countEndpoints.get(range.from, range.to) as { count: number };
+    const search = normalizedSearch(filter?.search);
+    const countSql = search
+      ? `SELECT COUNT(*) as count FROM ${TABLE_ENDPOINT_METRICS} WHERE timestamp BETWEEN ? AND ? AND (LOWER(method) LIKE ?${LIKE_ESCAPE} OR LOWER(path) LIKE ?${LIKE_ESCAPE})`
+      : `SELECT COUNT(*) as count FROM ${TABLE_ENDPOINT_METRICS} WHERE timestamp BETWEEN ? AND ?`;
+    const countParams = search
+      ? [range.from, range.to, search, search]
+      : [range.from, range.to];
+    const { count } = this.db.prepare(countSql).get(...countParams) as { count: number };
     const offset = (pagination.page - 1) * pagination.limit;
-    const data = this.stmts.getEndpointsPaginated.all(
-      range.from, range.to, pagination.limit, offset,
-    ) as EndpointMetricRow[];
+    const dataSql = search
+      ? `SELECT * FROM ${TABLE_ENDPOINT_METRICS} WHERE timestamp BETWEEN ? AND ? AND (LOWER(method) LIKE ?${LIKE_ESCAPE} OR LOWER(path) LIKE ?${LIKE_ESCAPE}) ORDER BY timestamp ASC LIMIT ? OFFSET ?`
+      : `SELECT * FROM ${TABLE_ENDPOINT_METRICS} WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC LIMIT ? OFFSET ?`;
+    const dataParams = search
+      ? [range.from, range.to, search, search, pagination.limit, offset]
+      : [range.from, range.to, pagination.limit, offset];
+    const data = this.db.prepare(dataSql).all(...dataParams) as EndpointMetricRow[];
     return buildPaginatedResult(data, count, pagination);
   }
 
@@ -533,34 +795,70 @@ export class SQLiteAdapter implements DatabaseAdapter {
     thresholdMs: number,
     range: TimeRange,
     pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<EndpointMetricRow>> {
+    const search = normalizedSearch(filter?.search);
+    const whereFilter = search
+      ? `AND (LOWER(method) LIKE ?${LIKE_ESCAPE} OR LOWER(path) LIKE ?${LIKE_ESCAPE})`
+      : "";
     const countSql = `
       SELECT COUNT(*) as count FROM ${TABLE_ENDPOINT_METRICS}
       WHERE timestamp BETWEEN ? AND ? AND avg_duration > ?
+      ${whereFilter}
     `;
-    const { count } = this.db.prepare(countSql).get(range.from, range.to, thresholdMs) as { count: number };
+    const countParams = search
+      ? [range.from, range.to, thresholdMs, search, search]
+      : [range.from, range.to, thresholdMs];
+    const { count } = this.db.prepare(countSql).get(...countParams) as { count: number };
     const offset = (pagination.page - 1) * pagination.limit;
     const dataSql = `
       SELECT * FROM ${TABLE_ENDPOINT_METRICS}
       WHERE timestamp BETWEEN ? AND ? AND avg_duration > ?
+      ${whereFilter}
       ORDER BY avg_duration DESC
       LIMIT ? OFFSET ?
     `;
-    const data = this.db.prepare(dataSql).all(
-      range.from, range.to, thresholdMs, pagination.limit, offset,
-    ) as EndpointMetricRow[];
+    const dataParams = search
+      ? [range.from, range.to, thresholdMs, search, search, pagination.limit, offset]
+      : [range.from, range.to, thresholdMs, pagination.limit, offset];
+    const data = this.db.prepare(dataSql).all(...dataParams) as EndpointMetricRow[];
     return buildPaginatedResult(data, count, pagination);
   }
 
   async getErrorLogPaginated(
     range: TimeRange,
     pagination: PaginationParams,
+    filter?: QueryFilter,
   ): Promise<PaginatedResult<ErrorLogRow>> {
-    const { count } = this.stmts.countErrors.get(range.from, range.to) as { count: number };
+    const search = normalizedSearch(filter?.search);
+    const status = parseStatusFilter(filter?.status);
+    const whereFilter = search
+      ? `AND (LOWER(method) LIKE ?${LIKE_ESCAPE} OR LOWER(path) LIKE ?${LIKE_ESCAPE} OR LOWER(COALESCE(error_msg, '')) LIKE ?${LIKE_ESCAPE})`
+      : "";
+    const statusFilter = status.clause ? ` ${status.clause}` : "";
+    const countSql = `
+      SELECT COUNT(*) as count FROM ${TABLE_ERROR_LOG}
+      WHERE timestamp BETWEEN ? AND ?
+      ${statusFilter}
+      ${whereFilter}
+    `;
+    const countParams = search
+      ? [range.from, range.to, ...status.params, search, search, search]
+      : [range.from, range.to, ...status.params];
+    const { count } = this.db.prepare(countSql).get(...countParams) as { count: number };
     const offset = (pagination.page - 1) * pagination.limit;
-    const data = this.stmts.getErrorsPaginated.all(
-      range.from, range.to, pagination.limit, offset,
-    ) as ErrorLogRow[];
+    const dataSql = `
+      SELECT * FROM ${TABLE_ERROR_LOG}
+      WHERE timestamp BETWEEN ? AND ?
+      ${statusFilter}
+      ${whereFilter}
+      ORDER BY timestamp DESC
+      LIMIT ? OFFSET ?
+    `;
+    const dataParams = search
+      ? [range.from, range.to, ...status.params, search, search, search, pagination.limit, offset]
+      : [range.from, range.to, ...status.params, pagination.limit, offset];
+    const data = this.db.prepare(dataSql).all(...dataParams) as ErrorLogRow[];
     return buildPaginatedResult(data, count, pagination);
   }
 
@@ -615,6 +913,18 @@ export class SQLiteAdapter implements DatabaseAdapter {
     } catch (err) {
       logDbError("SQLite getUser", err);
       return null;
+    }
+  }
+
+  async hasAnyUser(): Promise<boolean> {
+    try {
+      const row = this.db
+        .prepare(`SELECT 1 AS ok FROM ${TABLE_AUTH} LIMIT 1`)
+        .get() as { ok: number } | undefined;
+      return row != null;
+    } catch (err) {
+      logDbError("SQLite hasAnyUser", err);
+      return false;
     }
   }
 

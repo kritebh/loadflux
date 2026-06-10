@@ -3,6 +3,14 @@
 @tailwind utilities;
 
 @layer base {
+  /* Prefer dark native form controls (date/time pickers) when dashboard is in dark mode */
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -12,5 +20,38 @@
   }
   ::-webkit-scrollbar-thumb {
     @apply bg-gray-300 dark:bg-gray-600 rounded-full;
+  }
+}
+
+@layer components {
+  /* Native date/time: color scheme follows shell (picker popover matches theme) */
+  .lf-picker-shell {
+    color-scheme: light;
+  }
+  html.dark .lf-picker-shell {
+    color-scheme: dark;
+  }
+
+  /* WebKit: calendar/clock icon — larger hit target, readable in both themes */
+  .lf-native-date::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.55;
+    padding: 0.2rem;
+    margin-inline-start: 0.15rem;
+    scale: 1.05;
+  }
+
+  html.dark .lf-native-date::-webkit-calendar-picker-indicator {
+    opacity: 0.92;
+    filter: invert(1) brightness(1.08) contrast(1.02);
+  }
+
+  .lf-picker-shell:hover .lf-native-date::-webkit-calendar-picker-indicator {
+    opacity: 0.8;
+  }
+
+  html.dark .lf-picker-shell:hover .lf-native-date::-webkit-calendar-picker-indicator {
+    opacity: 1;
+    filter: invert(1) brightness(1.2);
   }
 }

@@ -3,6 +3,7 @@ import clsx from "clsx";
 import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import Layout from "@theme/Layout";
+import Screenshot from "@site/src/components/Screenshot";
 import styles from "./index.module.css";
 
 function HeroBanner() {
@@ -21,7 +22,7 @@ function HeroBanner() {
           </Link>
         </div>
         <div className={styles.heroImage}>
-          <img src="/img/screenshots/dashboard.png" alt="LoadFlux Dashboard" />
+          <Screenshot name="dashboard" alt="LoadFlux Dashboard" />
         </div>
       </div>
     </header>

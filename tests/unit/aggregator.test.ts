@@ -1,29 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Aggregator } from "../../src/core/aggregator.js";
 import { SQLiteAdapter } from "../../src/db/sqlite.js";
-import fs from "fs";
-import path from "path";
-import os from "os";
-
-function tmpDbPath(): string {
-  return path.join(os.tmpdir(), `loadflux-agg-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
-}
+import { tmpDbPath, cleanupSqliteDb } from "../helpers/db.js";
 
 describe("Aggregator", () => {
   let db: SQLiteAdapter;
   let dbPath: string;
 
   beforeEach(async () => {
-    dbPath = tmpDbPath();
+    dbPath = tmpDbPath("loadflux-agg-test");
     db = new SQLiteAdapter(dbPath);
     await db.connect();
   });
 
   afterEach(async () => {
     await db.close();
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupSqliteDb(dbPath);
   });
 
   it("buffers records and flushes to DB on stop", async () => {

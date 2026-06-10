@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import { Doughnut } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
+import { useTheme } from "../../hooks/useTheme";
 
 interface Props {
   value: number;
@@ -17,30 +19,39 @@ function getColor(value: number, max: number): string {
 }
 
 export function GaugeChart({ value, max = 100, label, color, suffix = "%" }: Props) {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const clamped = Math.min(Math.max(value, 0), max);
   const gaugeColor = color || getColor(clamped, max);
 
-  const data = {
-    datasets: [
-      {
-        data: [clamped, max - clamped],
-        backgroundColor: [gaugeColor, document.documentElement.classList.contains("dark") ? "#374151" : "#e5e7eb"],
-        borderWidth: 0,
-        circumference: 240,
-        rotation: 240,
-      },
-    ],
-  };
+  const data = useMemo(
+    () => ({
+      datasets: [
+        {
+          data: [clamped, max - clamped],
+          backgroundColor: [gaugeColor, isDark ? "#374151" : "#e5e7eb"],
+          borderWidth: 0,
+          circumference: 240,
+          rotation: 240,
+        },
+      ],
+    }),
+    [clamped, max, gaugeColor, isDark],
+  );
 
-  const options: ChartOptions<"doughnut"> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    cutout: "78%",
-    plugins: {
-      legend: { display: false },
-      tooltip: { enabled: false },
-    },
-  };
+  const options: ChartOptions<"doughnut"> = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      cutout: "78%",
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false },
+      },
+    }),
+    [],
+  );
 
   return (
     <div className="flex flex-col items-center">

@@ -4,6 +4,7 @@ import { SQLiteAdapter } from "./db/sqlite.js";
 import { MongoDBAdapter } from "./db/mongodb.js";
 import { MetricsStore } from "./core/metrics-store.js";
 import { startRetentionCron, stopRetentionCron } from "./core/cron.js";
+import { isLoopbackListenHost } from "./core/listen-host.js";
 import { setupInitialAuth } from "./auth/auth.js";
 import { createExpressMiddleware } from "./middleware/express.js";
 import { createFastifyPlugin } from "./middleware/fastify.js";
@@ -85,6 +86,18 @@ async function createContext(
 export function loadflux(userConfig?: LoadFluxConfig) {
   const config = resolveConfig({ ...userConfig, framework: "express" });
 
+  if (
+    config.disableOnLocalhost &&
+    isLoopbackListenHost(config.listenHost)
+  ) {
+    console.warn(
+      "[LoadFlux] Disabled: disableOnLocalhost is set and listenHost is loopback.",
+    );
+    return function loadfluxDisabled(_req: any, _res: any, next: any) {
+      next();
+    };
+  }
+
   // We need to initialize async but return sync middleware.
   // Use a lazy init pattern: first request triggers initialization.
   let ctx: MiddlewareContext | null = null;
@@ -142,6 +155,16 @@ export function loadfluxFastify(userConfig?: LoadFluxConfig) {
     ...userConfig,
     framework: "fastify",
   });
+
+  if (
+    resolvedConfig.disableOnLocalhost &&
+    isLoopbackListenHost(resolvedConfig.listenHost)
+  ) {
+    console.warn(
+      "[LoadFlux] Disabled: disableOnLocalhost is set and listenHost is loopback.",
+    );
+    return async function loadfluxFastifyDisabled() {};
+  }
 
   async function plugin(fastify: any) {
     const ctx = await createContext({

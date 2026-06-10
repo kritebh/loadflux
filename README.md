@@ -13,7 +13,8 @@ Lightweight, embeddable server monitoring dashboard for Node.js. Drop a single m
 - **Error tracking** — error log with status codes, durations, and stack traces
 - **Configurable retention** and slow request thresholds
 - **Password-protected** with bcrypt hashing and HMAC-SHA256 session tokens
-- **Dark/light theme** with time range selectors (5m to 30d)
+- **Dark/light theme** with **custom from/to date-time** ranges (default rolling last hour) on historical pages
+- **Search** on Endpoints and Errors; **HTTP status filter** on Errors
 - **SQLite by default** (zero-config), optional MongoDB support
 - **JSON export** for all metrics
 - Works with **Express**, **Fastify**, and **NestJS** (via their underlying framework)
@@ -103,14 +104,19 @@ loadflux({
 
   // Routes to exclude from monitoring
   excludeRoutes: ["/health", "/ready"],
+
+  // Optional: see Configuration Options in the docs for disableOnLocalhost,
+  // listenHost (LOADFLUX_LISTEN_HOST / HOST), and trustProxy (LOADFLUX_TRUST_PROXY).
 });
 ```
 
-You can also configure auth via environment variables:
+Environment variables:
 
 ```bash
 LOADFLUX_USERNAME=admin
 LOADFLUX_PASSWORD=secret
+# LOADFLUX_LISTEN_HOST=0.0.0.0   # bind host hint for disableOnLocalhost
+# LOADFLUX_TRUST_PROXY=1        # behind a trusted reverse proxy only
 ```
 
 ## Requirements

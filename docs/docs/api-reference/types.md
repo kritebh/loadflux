@@ -38,6 +38,9 @@ interface LoadFluxConfig {
   };
   slowRequestThreshold?: number;
   excludeRoutes?: string[];
+  disableOnLocalhost?: boolean;
+  listenHost?: string;
+  trustProxy?: boolean;
 }
 ```
 

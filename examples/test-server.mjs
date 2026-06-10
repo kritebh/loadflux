@@ -7,8 +7,6 @@ import { dirname, resolve } from "path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: resolve(__dirname, "../.env.example") });
 
-console.log(process.env.LOADFLUX_PASSWORD);
-
 const app = express();
 
 // Mount loadflux - dashboard at /loadflux, API at /loadflux/api/*

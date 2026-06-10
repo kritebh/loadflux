@@ -1,21 +1,14 @@
 import type { MiddlewareContext } from "./types.js";
 import { createApiHandler } from "../api/router.js";
 import { createStaticHandler } from "../server/static.js";
+import { createRouteExcluder } from "./route-exclude.js";
 
 export function createFastifyPlugin(ctx: MiddlewareContext) {
   const { config, metricsStore } = ctx;
   const basePath = config.path;
   const apiHandler = createApiHandler(ctx);
   const staticHandler = createStaticHandler(basePath);
-  const excludeSet = new Set(config.excludeRoutes);
-  const excludePrefixes = config.excludeRoutes
-    .filter((route) => route.endsWith("*"))
-    .map((route) => route.replace(/\/\*+$/, ""));
-
-  const isExcluded = (path: string): boolean => {
-    if (excludeSet.has(path)) return true;
-    return excludePrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"));
-  };
+  const isExcluded = createRouteExcluder(config.excludeRoutes);
 
   async function loadfluxPlugin(fastify: any) {
     // Register loadflux routes in an encapsulated context so we can

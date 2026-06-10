@@ -68,7 +68,9 @@ export class AuthError extends Error {
 
 // Auth
 export function checkAuthStatus() {
-  return apiFetch<{ configured: boolean }>("/auth/status");
+  return apiFetch<{ configured: boolean; authenticated: boolean }>(
+    "/auth/status",
+  );
 }
 
 export async function logout() {
@@ -94,13 +96,17 @@ export function setupAuth(username: string, password: string) {
 }
 
 // System
-export function fetchSystemMetrics(from: number, to: number) {
-  return apiFetch<SystemMetricRow[]>(`/system?from=${from}&to=${to}`);
+export function fetchSystemMetrics(from: number, to: number, maxPoints?: number) {
+  let url = `/system?from=${from}&to=${to}`;
+  if (maxPoints) url += `&max_points=${maxPoints}`;
+  return apiFetch<SystemMetricRow[]>(url);
 }
 
 // Process
-export function fetchProcessMetrics(from: number, to: number) {
-  return apiFetch<ProcessMetricRow[]>(`/process?from=${from}&to=${to}`);
+export function fetchProcessMetrics(from: number, to: number, maxPoints?: number) {
+  let url = `/process?from=${from}&to=${to}`;
+  if (maxPoints) url += `&max_points=${maxPoints}`;
+  return apiFetch<ProcessMetricRow[]>(url);
 }
 
 // Endpoints
@@ -112,11 +118,12 @@ export function fetchTopEndpoints(
   metric: string,
   from: number,
   to: number,
-  limit = 10
+  limit = 10,
+  search?: string,
 ) {
-  return apiFetch<TopEndpointRow[]>(
-    `/endpoints/top?metric=${metric}&limit=${limit}&from=${from}&to=${to}`
-  );
+  let url = `/endpoints/top?metric=${metric}&limit=${limit}&from=${from}&to=${to}`;
+  if (search?.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
+  return apiFetch<TopEndpointRow[]>(url);
 }
 
 export function fetchSlowRequests(from: number, to: number, threshold?: number) {
@@ -132,6 +139,12 @@ export function fetchErrors(from: number, to: number) {
 
 export function fetchStatusDistribution(from: number, to: number) {
   return apiFetch<StatusDistribution>(`/errors/distribution?from=${from}&to=${to}`);
+}
+
+export function fetchErrorStatusCodes(from: number, to: number) {
+  return apiFetch<{ codes: number[] }>(
+    `/errors/status-codes?from=${from}&to=${to}`,
+  );
 }
 
 // Overview
@@ -174,22 +187,44 @@ export interface PaginatedResponse<T> {
   };
 }
 
-export function fetchEndpointMetricsPaginated(from: number, to: number, page: number, limit = 200) {
-  return apiFetch<PaginatedResponse<EndpointMetricRow>>(
-    `/endpoints?from=${from}&to=${to}&page=${page}&limit=${limit}`
-  );
-}
-
-export function fetchSlowRequestsPaginated(from: number, to: number, page: number, limit = 200, threshold?: number) {
-  let url = `/endpoints/slow?from=${from}&to=${to}&page=${page}&limit=${limit}`;
-  if (threshold) url += `&threshold=${threshold}`;
+export function fetchEndpointMetricsPaginated(
+  from: number,
+  to: number,
+  page: number,
+  limit = 200,
+  search?: string,
+) {
+  let url = `/endpoints?from=${from}&to=${to}&page=${page}&limit=${limit}`;
+  if (search?.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
   return apiFetch<PaginatedResponse<EndpointMetricRow>>(url);
 }
 
-export function fetchErrorsPaginated(from: number, to: number, page: number, limit = 200) {
-  return apiFetch<PaginatedResponse<ErrorLogRow>>(
-    `/errors?from=${from}&to=${to}&page=${page}&limit=${limit}`
-  );
+export function fetchSlowRequestsPaginated(
+  from: number,
+  to: number,
+  page: number,
+  limit = 200,
+  threshold?: number,
+  search?: string,
+) {
+  let url = `/endpoints/slow?from=${from}&to=${to}&page=${page}&limit=${limit}`;
+  if (threshold) url += `&threshold=${threshold}`;
+  if (search?.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
+  return apiFetch<PaginatedResponse<EndpointMetricRow>>(url);
+}
+
+export function fetchErrorsPaginated(
+  from: number,
+  to: number,
+  page: number,
+  limit = 200,
+  search?: string,
+  status?: string,
+) {
+  let url = `/errors?from=${from}&to=${to}&page=${page}&limit=${limit}`;
+  if (search?.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
+  if (status && status !== "all") url += `&status=${encodeURIComponent(status)}`;
+  return apiFetch<PaginatedResponse<ErrorLogRow>>(url);
 }
 
 // Types (mirrors server types)

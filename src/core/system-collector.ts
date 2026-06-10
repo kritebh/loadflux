@@ -1,6 +1,7 @@
 import os from "os";
 import fs from "fs";
 import type { SystemMetricRow } from "../types.js";
+import { memoryFromProcMeminfo } from "./linux-meminfo.js";
 
 // Previous CPU snapshot for delta calculation
 let prevCpuTimes: { idle: number; total: number } | null = null;
@@ -35,6 +36,15 @@ function getCpuPercent(): number {
 }
 
 function getMemory(): { total: number; used: number; percent: number } {
+  if (process.platform === "linux") {
+    try {
+      const text = fs.readFileSync("/proc/meminfo", "utf-8");
+      const fromProc = memoryFromProcMeminfo(text);
+      if (fromProc) return fromProc;
+    } catch {
+      // fall through to Node APIs
+    }
+  }
   const total = os.totalmem();
   const free = os.freemem();
   const used = total - free;

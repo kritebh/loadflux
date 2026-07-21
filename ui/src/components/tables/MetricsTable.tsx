@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 interface Column<T> {
   key: string;
@@ -14,14 +14,20 @@ interface Props<T> {
   emptyMessage?: string;
 }
 
-export function MetricsTable<T>({
+function MetricsTableInner<T>({
   columns,
   data,
   keyExtractor,
   emptyMessage = "No data available",
 }: Props<T>) {
+  // content-visibility skips layout/paint while the table is below the fold;
+  // it cannot go on <tr>/<td> (size containment excludes internal table parts).
+  // Intrinsic size ≈ header + rows at ~45px so scrollbar length stays stable.
   return (
-    <div className="overflow-x-auto">
+    <div
+      className="overflow-x-auto [content-visibility:auto]"
+      style={{ containIntrinsicSize: `auto ${45 * (data.length + 1)}px` }}
+    >
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-200 dark:border-gray-700">
@@ -81,3 +87,5 @@ export function MetricsTable<T>({
     </div>
   );
 }
+
+export const MetricsTable = memo(MetricsTableInner) as typeof MetricsTableInner;

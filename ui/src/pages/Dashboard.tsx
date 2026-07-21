@@ -120,7 +120,7 @@ export function Dashboard() {
         <StatCard
           title="Total Requests"
           value={overview.total_requests.toLocaleString()}
-          subtitle={`Since start (${formatUptime(proc.uptime_seconds)})`}
+          subtitle="All retained data"
           color="emerald"
           icon={
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -131,7 +131,7 @@ export function Dashboard() {
         <StatCard
           title="Error Rate"
           value={`${overview.error_rate.toFixed(2)}%`}
-          subtitle={`Since start (${formatUptime(proc.uptime_seconds)})`}
+          subtitle="All retained data"
           color={overview.error_rate > 5 ? "red" : overview.error_rate > 1 ? "amber" : "emerald"}
           icon={
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -269,6 +269,23 @@ export function Dashboard() {
       {/* Server info */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 px-5 py-3">
         <div className="flex items-center flex-wrap gap-x-6 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+          {server.cluster_enabled && (
+            <span>
+              <span className="text-gray-400 dark:text-gray-500">Cluster</span>{" "}
+              <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                {server.cluster_instances ?? 0} instance
+                {(server.cluster_instances ?? 0) === 1 ? "" : "s"}
+              </span>
+            </span>
+          )}
+          {server.instance_id && (
+            <span>
+              <span className="text-gray-400 dark:text-gray-500">Serving</span>{" "}
+              <span className="font-medium text-gray-700 dark:text-gray-300 font-mono">
+                {server.instance_id}
+              </span>
+            </span>
+          )}
           <span>
             <span className="text-gray-400 dark:text-gray-500">Node</span>{" "}
             <span className="font-medium text-gray-700 dark:text-gray-300">{server.node_version}</span>
@@ -282,7 +299,7 @@ export function Dashboard() {
             <span className="font-medium text-gray-700 dark:text-gray-300">{server.pid}</span>
           </span>
           <span>
-            <span className="text-gray-400 dark:text-gray-500">SSE Connections</span>{" "}
+            <span className="text-gray-400 dark:text-gray-500">SSE (this instance)</span>{" "}
             <span className="font-medium text-gray-700 dark:text-gray-300">{server.sse_connections}</span>
           </span>
         </div>

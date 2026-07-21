@@ -47,6 +47,14 @@ export interface LoadFluxConfig {
   listenHost?: string;
 
   trustProxy?: boolean;
+
+  /** Multi-instance / cluster aggregation (requires MongoDB for multiple writers). */
+  cluster?: {
+    /** Enable cluster-wide live and historical aggregation. */
+    enabled?: boolean;
+    /** Per-container ID; defaults to LOADFLUX_INSTANCE_ID, HOSTNAME, or os.hostname(). */
+    instanceId?: string;
+  };
 }
 
 export interface ResolvedConfig {
@@ -70,6 +78,10 @@ export interface ResolvedConfig {
   disableOnLocalhost: boolean;
   listenHost: string | null;
   trustProxy: boolean;
+  cluster: {
+    enabled: boolean;
+    instanceId: string;
+  };
 }
 
 // ─── Request Record (raw, in-memory before aggregation) ─────────────────────
@@ -87,8 +99,29 @@ export interface RequestRecord {
 
 // ─── Database Rows ──────────────────────────────────────────────────────────
 
+export interface MetricsQueryOptions {
+  /** Filter to a single instance; omit for all instances. */
+  instanceId?: string;
+  /** Aggregate metrics across all instances (cluster view). */
+  clusterAggregate?: boolean;
+}
+
+export interface LiveOverviewMetrics {
+  rps: number;
+  rpm: number;
+  total_requests: number;
+  total_errors: number;
+  error_rate: number;
+}
+
+export interface LifetimeTotals {
+  total_requests: number;
+  total_errors: number;
+}
+
 export interface SystemMetricRow {
   id?: number;
+  instance_id?: string;
   timestamp: number;
   cpu_percent: number;
   mem_total: number;
@@ -103,6 +136,7 @@ export interface SystemMetricRow {
 
 export interface ProcessMetricRow {
   id?: number;
+  instance_id?: string;
   timestamp: number;
   heap_used: number;
   heap_total: number;
@@ -115,6 +149,7 @@ export interface ProcessMetricRow {
 
 export interface EndpointMetricRow {
   id?: number;
+  instance_id?: string;
   timestamp: number;
   method: string;
   path: string;
@@ -137,6 +172,7 @@ export interface EndpointMetricRow {
 
 export interface ErrorLogRow {
   id?: number;
+  instance_id?: string;
   timestamp: number;
   method: string;
   path: string;
@@ -229,11 +265,22 @@ export interface DatabaseAdapter {
   getSystemMetrics(
     range: TimeRange,
     maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<SystemMetricRow[]>;
   getProcessMetrics(
     range: TimeRange,
     maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<ProcessMetricRow[]>;
+  getLiveOverview(now: number): Promise<LiveOverviewMetrics>;
+  /** O(1) lifetime counters for the live dashboard (not reduced by retention). */
+  getLifetimeTotals(): Promise<LifetimeTotals>;
+  /** Increment lifetime counters after an endpoint metrics flush. */
+  incrementLifetimeTotals(requests: number, errors: number): void;
+  getClusterSystemLive(lookbackMs: number): Promise<SystemMetricRow | null>;
+  getClusterProcessLive(lookbackMs: number): Promise<ProcessMetricRow | null>;
+  listInstances(range: TimeRange): Promise<string[]>;
+  countInstances(range: TimeRange): Promise<number>;
   getEndpointMetrics(
     range: TimeRange,
     filter?: QueryFilter,
@@ -260,11 +307,13 @@ export interface DatabaseAdapter {
     range: TimeRange,
     pagination: PaginationParams,
     maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<PaginatedResult<SystemMetricRow>>;
   getProcessMetricsPaginated(
     range: TimeRange,
     pagination: PaginationParams,
     maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<PaginatedResult<ProcessMetricRow>>;
   getEndpointMetricsPaginated(
     range: TimeRange,
@@ -348,6 +397,9 @@ export interface DashboardSnapshot {
     platform: string;
     pid: number;
     sse_connections: number;
+    instance_id?: string;
+    cluster_instances?: number;
+    cluster_enabled?: boolean;
   };
   timestamp: number;
 }

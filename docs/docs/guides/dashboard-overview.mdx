@@ -21,7 +21,7 @@ The main page shows a real-time overview:
 - **Top endpoints** — Highest traffic routes (1h window)
 - **Slowest endpoints** — Routes with highest P95 latency (1h window)
 - **Highest error rate** — Routes with the most errors (1h window)
-- **Server info** — Node.js version, platform, PID, active SSE connections
+- **Server info** — Node.js version, platform, PID, active SSE connections (per serving instance), cluster instance count when cluster mode is on
 
 All data on this page updates in real-time via SSE (every 2 seconds).
 
@@ -36,7 +36,9 @@ System resource monitoring with time-series charts:
 - **Disk** — Used vs total space (where available)
 - **Network I/O** — Bytes received/transmitted (Linux only; macOS/Windows show N/A)
 
-Use the **time range** control (custom from/to date and time, then **Apply**) to query any window within your retention. **Last 1h** resets to a rolling one-hour window (the default). Wide ranges are **downsampled** on the client so charts stay responsive.
+Use the **time range** control (custom from/to date and time, then **Apply**) to query any window within your retention. **Last 1h** resets to a rolling one-hour window (the default). Wide ranges are **downsampled on the server** (`max_points` query parameter) so charts stay responsive.
+
+When **cluster mode** is enabled, an **instance** selector lets you view cluster-aggregated system metrics (default) or a single replica.
 
 ## Endpoints
 
@@ -60,6 +62,8 @@ Node.js process health:
 - **Event loop delay** — Average and max delay in milliseconds
 - **GC pauses** — Garbage collection pause duration
 - **Uptime** — How long the server has been running (real-time from SSE)
+
+With cluster mode enabled, use the **instance** selector to filter process metrics to one container or view the cluster aggregate.
 
 ## Errors
 
@@ -85,6 +89,8 @@ Dashboard configuration:
 ## Theme
 
 Toggle between dark and light mode using the theme switch in the navbar. The dashboard respects your system preference by default.
+
+The navbar also shows a **Live / Disconnected** indicator for the SSE connection (and the serving `instance_id` when cluster mode is on).
 
 ## Time range (historical pages)
 

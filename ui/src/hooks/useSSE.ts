@@ -5,7 +5,6 @@ import {
   createContext,
   useContext,
   useSyncExternalStore,
-  startTransition,
 } from "react";
 import { getApiBase, type DashboardSnapshot } from "../api/client";
 
@@ -82,4 +81,20 @@ export function useSSE(): SSEState {
     getSnapshotStore,
   );
   return { snapshot, connected };
+}
+
+/** Instance id from SSE — re-renders only when the id string changes. */
+export function useServerInstanceId(): string | null {
+  const [instanceId, setInstanceId] = useState<string | null>(
+    () => snapshotStore?.server.instance_id ?? null,
+  );
+
+  useEffect(() => {
+    return subscribeSnapshot(() => {
+      const next = snapshotStore?.server.instance_id ?? null;
+      setInstanceId((prev) => (prev === next ? prev : next));
+    });
+  }, []);
+
+  return instanceId;
 }

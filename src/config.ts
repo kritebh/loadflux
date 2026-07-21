@@ -1,5 +1,6 @@
 import type { LoadFluxConfig, ResolvedConfig } from "./types.js";
 import path from "path";
+import { resolveInstanceId } from "./core/instance-id.js";
 
 const DEFAULTS = {
   path: "/loadflux",
@@ -73,6 +74,10 @@ export function resolveConfig(
     disableOnLocalhost: userConfig.disableOnLocalhost ?? false,
     listenHost,
     trustProxy,
+    cluster: {
+      enabled: userConfig.cluster?.enabled ?? false,
+      instanceId: resolveInstanceId(userConfig.cluster?.instanceId),
+    },
   };
 
   validate(resolved);
@@ -101,6 +106,11 @@ function validate(config: ResolvedConfig): void {
   if (!["sqlite", "mongodb"].includes(config.database.adapter)) {
     throw new Error(
       `LoadFlux: unsupported database adapter "${config.database.adapter}"`
+    );
+  }
+  if (config.cluster.enabled && config.database.adapter !== "mongodb") {
+    throw new Error(
+      "LoadFlux: cluster mode requires the mongodb database adapter"
     );
   }
 }

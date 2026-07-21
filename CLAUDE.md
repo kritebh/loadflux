@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview (at a glance)
 
-**LoadFlux** is an npm package that embeds a small **Grafana-like monitoring dashboard** into an existing **Node.js** app (Express or Fastify). It runs **in-process** (no extra daemon): middleware records request latency and errors, collectors sample CPU/RAM/disk/network (and process metrics), data is stored in **SQLite** by default or **MongoDB** optionally, and a **pre-built React UI** is served under a configurable base path (default `/loadflux`). **SSE** pushes live snapshots to the UI; historical views use REST queries with **custom from/to date-time ranges** (default rolling last hour). The **Endpoints** and **Errors** pages support **debounced search**; **Errors** also filters by HTTP status. System charts **downsample** wide ranges for performance. Auth is optional at install time and can be managed from the dashboard.
+**LoadFlux** is an npm package that embeds a small **Grafana-like monitoring dashboard** into an existing **Node.js** app (Express or Fastify). It runs **in-process** (no extra daemon): middleware records request latency and errors, collectors sample CPU/RAM/disk/network (and process metrics), data is stored in **SQLite** by default or **MongoDB** optionally, and a **pre-built React UI** is served under a configurable base path (default `/loadflux`). **SSE** pushes live snapshots to the UI; historical views use REST queries with **custom from/to date-time ranges** (default rolling last hour). **Cluster mode** (`cluster.enabled` + MongoDB) aggregates live metrics across multiple containers (e.g. AWS App Runner). The **Endpoints** and **Errors** pages support **debounced search**; **Errors** also filters by HTTP status. System charts **downsample** wide ranges for performance. Auth is optional at install time and can be managed from the dashboard.
 
 ## Commands
 
@@ -74,7 +74,7 @@ React 19 + Tailwind + Chart.js. Vite root is `ui/`.
 | `ui/src/components/` | Charts (TimeSeries, Bar, Doughnut, …), layout, `TimeRangeSelector`, shared `icons` |
 | `ui/src/hooks/` | `useSSE`, `useMetrics` (polling + time range), `useDebouncedValue`, `useTheme` |
 | `ui/src/api/client.ts` | Fetch wrapper, SSE, API helpers |
-| `ui/src/utils/downsample.ts` | Index-based downsampling for large time series (e.g. System page) |
+| `ui/src/utils/` | `chartTheme.ts` (Chart.js theme colors), `format.ts` (formatting helpers). Time-series downsampling happens server-side via the `max_points` query param |
 
 ### Key design patterns
 
@@ -88,6 +88,7 @@ React 19 + Tailwind + Chart.js. Vite root is `ui/`.
 - **Retention**: `node-cron` runs `runRetentionCleanup()` on `config.retention.cronExpression` (default 2:00 daily). Cutoff uses `retention_days` from DB settings when set, else config `retention.days`. `runRetentionCleanup` is exported from `cron.ts` for unit tests.
 - **`disableOnLocalhost`**: When `true` and `listenHost` is loopback (`127.0.0.1`, `::1`, `localhost`, … per `isLoopbackListenHost()`), LoadFlux is a no-op — useful so dev servers do not mount the dashboard. `listenHost` comes from config `listenHost`, then `LOADFLUX_LISTEN_HOST`, then `HOST`.
 - **`trustProxy`**: When true (or `LOADFLUX_TRUST_PROXY`), login rate limiting uses `X-Forwarded-For` — only enable behind a **trusted** reverse proxy.
+- **`cluster`**: When `enabled: true` (requires MongoDB), metrics are tagged with `instance_id` and the live dashboard aggregates across all replicas — use for App Runner, Kubernetes, etc. Instance ID defaults to `LOADFLUX_INSTANCE_ID`, `HOSTNAME`, or `os.hostname()`. Live RPS/RPM come from recent `endpoint_metrics` windows; **Total Requests** / error rate use O(1) lifetime counters (seeded once, then incremented on flush).
 - **SQLite migrations**: Versioned in `src/db/sqlite.ts`, additive only; version in `settings` table.
 
 ### Target API
@@ -129,5 +130,6 @@ See `.env.example`:
 | `LOADFLUX_LISTEN_HOST` | Bind host hint for `disableOnLocalhost` (should match `app.listen` host); falls back to `HOST` if unset |
 | `HOST` | Same role as `LOADFLUX_LISTEN_HOST` when the latter is not set |
 | `LOADFLUX_TRUST_PROXY` | `1` / `true` / `yes` → trust `X-Forwarded-For` for login rate limiting |
+| `LOADFLUX_INSTANCE_ID` | Per-container instance ID for cluster mode (falls back to `HOSTNAME`, then `os.hostname()`) |
 
-Same options exist on `LoadFluxConfig` as `listenHost`, `trustProxy`, `disableOnLocalhost` (see `src/types.ts`).
+Same options exist on `LoadFluxConfig` as `listenHost`, `trustProxy`, `disableOnLocalhost`, `cluster` (see `src/types.ts`).

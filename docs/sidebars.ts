@@ -29,6 +29,7 @@ const sidebars: SidebarsConfig = {
         "guides/dashboard-overview",
         "guides/monitoring-endpoints",
         "guides/sse-real-time",
+        "guides/multi-instance",
       ],
     },
     {
@@ -37,6 +38,7 @@ const sidebars: SidebarsConfig = {
       items: [
         "api-reference/types",
         "api-reference/database-adapter",
+        "api-reference/rest-api",
       ],
     },
   ],

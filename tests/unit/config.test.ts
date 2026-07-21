@@ -23,6 +23,8 @@ describe("resolveConfig", () => {
       expect(config.disableOnLocalhost).toBe(false);
       expect(config.listenHost).toBeNull();
       expect(config.trustProxy).toBe(false);
+      expect(config.cluster.enabled).toBe(false);
+      expect(config.cluster.instanceId).toBeTruthy();
     } finally {
       if (prevHost !== undefined) process.env.HOST = prevHost;
       if (prevLf !== undefined) process.env.LOADFLUX_LISTEN_HOST = prevLf;

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Bar } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
 import { useTheme } from "../../hooks/useTheme";
@@ -17,7 +17,7 @@ interface Props {
   height?: number;
 }
 
-export function BarChart({
+export const BarChart = memo(function BarChart({
   labels,
   data,
   label,
@@ -80,4 +80,4 @@ export function BarChart({
       <Bar data={chartData} options={options} />
     </div>
   );
-}
+});

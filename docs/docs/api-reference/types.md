@@ -41,6 +41,10 @@ interface LoadFluxConfig {
   disableOnLocalhost?: boolean;
   listenHost?: string;
   trustProxy?: boolean;
+  cluster?: {
+    enabled?: boolean;
+    instanceId?: string;
+  };
 }
 ```
 
@@ -73,6 +77,7 @@ One row per collection interval:
 
 ```typescript
 interface SystemMetricRow {
+  instance_id?: string;
   timestamp: number;
   cpu_percent: number;
   mem_total: number;
@@ -90,6 +95,7 @@ interface SystemMetricRow {
 
 ```typescript
 interface ProcessMetricRow {
+  instance_id?: string;
   timestamp: number;
   heap_used: number;
   heap_total: number;
@@ -107,6 +113,7 @@ Aggregated per route per flush window:
 
 ```typescript
 interface EndpointMetricRow {
+  instance_id?: string;
   timestamp: number;
   method: string;
   path: string;
@@ -134,6 +141,7 @@ Individual error entries:
 
 ```typescript
 interface ErrorLogRow {
+  instance_id?: string;
   timestamp: number;
   method: string;
   path: string;
@@ -169,6 +177,102 @@ interface TimeRange {
   to: number;   // Unix timestamp (ms)
 }
 ```
+
+### `MetricsQueryOptions`
+
+Used by system/process queries and the REST API (`instance` query param):
+
+```typescript
+interface MetricsQueryOptions {
+  instanceId?: string;
+  clusterAggregate?: boolean;
+}
+```
+
+### `QueryFilter`
+
+```typescript
+interface QueryFilter {
+  search?: string;
+  status?: string;
+}
+```
+
+### `PaginationParams` / `PaginatedResult<T>`
+
+```typescript
+interface PaginationParams {
+  page: number;
+  limit: number;
+}
+
+interface PaginatedResult<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+```
+
+### `LiveOverviewMetrics` / `LifetimeTotals`
+
+```typescript
+interface LiveOverviewMetrics {
+  rps: number;
+  rpm: number;
+  total_requests: number;
+  total_errors: number;
+  error_rate: number;
+}
+
+interface LifetimeTotals {
+  total_requests: number;
+  total_errors: number;
+}
+```
+
+### `DashboardSnapshot`
+
+Shape of SSE messages and `GET /api/snapshot` (not exported from the package; documented for integrators):
+
+```typescript
+interface DashboardSnapshot {
+  system: { /* cpu, mem, disk, net fields */ };
+  process: { /* heap, event loop, gc, uptime */ };
+  overview: {
+    rps: number;
+    rpm: number;
+    total_requests: number;
+    error_rate: number;
+    avg_duration: number;
+    p95_duration: number;
+    p99_duration: number;
+  };
+  endpoints: {
+    top_by_requests: TopEndpointRow[];
+    top_by_latency: TopEndpointRow[];
+    top_by_errors: TopEndpointRow[];
+    status: StatusDistribution;
+  };
+  server: {
+    node_version: string;
+    platform: string;
+    pid: number;
+    sse_connections: number;
+    instance_id?: string;
+    cluster_instances?: number;
+    cluster_enabled?: boolean;
+  };
+  timestamp: number;
+}
+```
+
+See [Real-Time Updates (SSE)](/docs/guides/sse-real-time) for field semantics.
 
 ### `TopEndpointRow`
 

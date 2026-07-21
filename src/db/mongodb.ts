@@ -12,6 +12,9 @@ import type {
   PaginationParams,
   PaginatedResult,
   QueryFilter,
+  MetricsQueryOptions,
+  LiveOverviewMetrics,
+  LifetimeTotals,
 } from "../types.js";
 import {
   TABLE_SYSTEM_METRICS,
@@ -22,9 +25,16 @@ import {
   TABLE_AUTH,
   EMPTY_STATUS_DISTRIBUTION,
   EMPTY_OVERVIEW_BASE,
+  LEGACY_INSTANCE_ID,
+  LIFETIME_TOTAL_REQUESTS_KEY,
+  LIFETIME_TOTAL_ERRORS_KEY,
+  LIFETIME_TOTALS_SEEDED_KEY,
+  INSTANCE_BACKFILL_DONE_KEY,
+  MAX_INSTANCES_LIST,
   withRpsRpm,
   buildPaginatedResult,
 } from "./constants.js";
+import { aggregateProcessRows, aggregateSystemRows } from "./cluster-helpers.js";
 import { fireAndForget } from "./utils.js";
 import {
   ensureSampleSize,
@@ -48,6 +58,18 @@ function statusQuery(status?: string): number | Record<string, any> | null {
   if (filter.kind === "all") return null;
   if (filter.kind === "range") return { $gte: filter.min, $lte: filter.max };
   return filter.code;
+}
+
+function readLifetimeCounter(doc: unknown): number {
+  if (!doc || typeof doc !== "object") return 0;
+  const row = doc as { numeric_value?: unknown; value?: unknown };
+  if (
+    typeof row.numeric_value === "number" &&
+    Number.isFinite(row.numeric_value)
+  ) {
+    return row.numeric_value;
+  }
+  return parseInt(String(row.value ?? "0"), 10) || 0;
 }
 
 export class MongoDBAdapter implements DatabaseAdapter {
@@ -86,6 +108,8 @@ export class MongoDBAdapter implements DatabaseAdapter {
     this.authCol = this.db.collection(TABLE_AUTH);
 
     await this.ensureIndexes();
+    await this.backfillLegacyInstanceIds();
+    await this.seedLifetimeTotalsIfNeeded();
   }
 
   async close(): Promise<void> {
@@ -95,14 +119,112 @@ export class MongoDBAdapter implements DatabaseAdapter {
   private async ensureIndexes(): Promise<void> {
     await Promise.all([
       this.systemCol.createIndex({ timestamp: 1 }),
+      this.systemCol.createIndex({ instance_id: 1, timestamp: 1 }),
       this.processCol.createIndex({ timestamp: 1 }),
+      this.processCol.createIndex({ instance_id: 1, timestamp: 1 }),
       this.endpointCol.createIndex({ timestamp: 1 }),
+      this.endpointCol.createIndex({ instance_id: 1, timestamp: 1 }),
       this.endpointCol.createIndex({ method: 1, path: 1 }),
       this.errorCol.createIndex({ timestamp: 1 }),
+      this.errorCol.createIndex({ instance_id: 1, timestamp: 1 }),
       this.errorCol.createIndex({ method: 1, path: 1 }),
       this.settingsCol.createIndex({ key: 1 }, { unique: true }),
       this.authCol.createIndex({ username: 1 }, { unique: true }),
     ]);
+  }
+
+  private async backfillLegacyInstanceIds(): Promise<void> {
+    // `$exists:false`/null cannot use the instance_id index, so this is a full
+    // scan of all four collections. Run it once, then record a flag so every
+    // subsequent boot (and every replica) skips it.
+    const done = await this.settingsCol.findOne({ key: INSTANCE_BACKFILL_DONE_KEY });
+    if (done != null) return;
+
+    const missingFilter = {
+      $or: [{ instance_id: { $exists: false } }, { instance_id: null }],
+    };
+    const setLegacy = { $set: { instance_id: LEGACY_INSTANCE_ID } };
+    await Promise.all([
+      this.systemCol.updateMany(missingFilter, setLegacy),
+      this.processCol.updateMany(missingFilter, setLegacy),
+      this.endpointCol.updateMany(missingFilter, setLegacy),
+      this.errorCol.updateMany(missingFilter, setLegacy),
+    ]);
+    await this.settingsCol.updateOne(
+      { key: INSTANCE_BACKFILL_DONE_KEY },
+      { $setOnInsert: { key: INSTANCE_BACKFILL_DONE_KEY, value: "1" } },
+      { upsert: true },
+    );
+  }
+
+  private async seedLifetimeTotalsIfNeeded(): Promise<void> {
+    const claim = await this.settingsCol.findOneAndUpdate(
+      { key: LIFETIME_TOTALS_SEEDED_KEY },
+      { $setOnInsert: { key: LIFETIME_TOTALS_SEEDED_KEY, value: "1" } },
+      { upsert: true, returnDocument: "before" },
+    );
+    // Already seeded by this or another replica
+    if (claim != null) return;
+
+    const result = await this.endpointCol
+      .aggregate<{ total_requests: number; total_errors: number }>([
+        {
+          $group: {
+            _id: null,
+            total_requests: { $sum: "$request_count" },
+            total_errors: { $sum: "$error_count" },
+          },
+        },
+      ])
+      .toArray();
+    const row = result[0] ?? { total_requests: 0, total_errors: 0 };
+    await Promise.all([
+      this.applyLifetimeBaseline(LIFETIME_TOTAL_REQUESTS_KEY, row.total_requests),
+      this.applyLifetimeBaseline(LIFETIME_TOTAL_ERRORS_KEY, row.total_errors),
+    ]);
+  }
+
+  /**
+   * Set lifetime counter to at least `baseline`. Uses $max so a concurrent
+   * increment that created the doc first cannot drop the historical baseline.
+   */
+  private async applyLifetimeBaseline(
+    key: string,
+    baseline: number,
+  ): Promise<void> {
+    await this.settingsCol.updateOne(
+      { key },
+      [
+        {
+          $set: {
+            key,
+            numeric_value: {
+              $max: [{ $ifNull: ["$numeric_value", 0] }, baseline],
+            },
+            value: {
+              $toString: {
+                $max: [{ $ifNull: ["$numeric_value", 0] }, baseline],
+              },
+            },
+          },
+        },
+      ],
+      { upsert: true },
+    );
+  }
+
+  private instanceMatch(options?: MetricsQueryOptions): Record<string, unknown> {
+    if (!options?.instanceId) return {};
+    if (options.instanceId === LEGACY_INSTANCE_ID) {
+      return {
+        $or: [
+          { instance_id: LEGACY_INSTANCE_ID },
+          { instance_id: null },
+          { instance_id: { $exists: false } },
+        ],
+      };
+    }
+    return { instance_id: options.instanceId };
   }
 
   private parseDatabaseName(): string | null {
@@ -134,7 +256,15 @@ export class MongoDBAdapter implements DatabaseAdapter {
   insertEndpointMetricsBatch(rows: EndpointMetricRow[]): void {
     if (rows.length === 0) return;
     fireAndForget(
-      this.endpointCol.insertMany(rows),
+      this.endpointCol.insertMany(rows).then(() => {
+        let totalRequests = 0;
+        let totalErrors = 0;
+        for (const row of rows) {
+          totalRequests += row.request_count;
+          totalErrors += row.error_count;
+        }
+        this.incrementLifetimeTotals(totalRequests, totalErrors);
+      }),
       "MongoDB insertEndpointMetricsBatch",
     );
   }
@@ -167,20 +297,100 @@ export class MongoDBAdapter implements DatabaseAdapter {
   async getSystemMetrics(
     range: TimeRange,
     maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<SystemMetricRow[]> {
     const sampleSize = ensureSampleSize(maxPoints);
+    const baseMatch = {
+      timestamp: { $gte: range.from, $lte: range.to },
+      ...this.instanceMatch(options),
+    };
+
+    if (options?.clusterAggregate) {
+      const span = Math.max(range.to - range.from, 1);
+      const bucketMs = sampleSize
+        ? Math.max(Math.floor(span / sampleSize), 1)
+        : span;
+      const docs = await this.systemCol
+        .aggregate<SystemMetricRow>([
+          { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+          {
+            $addFields: {
+              bucket: {
+                $subtract: [
+                  "$timestamp",
+                  {
+                    $mod: [
+                      { $subtract: ["$timestamp", range.from] },
+                      bucketMs,
+                    ],
+                  },
+                ],
+              },
+              iid: { $ifNull: ["$instance_id", LEGACY_INSTANCE_ID] },
+            },
+          },
+          {
+            $group: {
+              _id: { bucket: "$bucket", iid: "$iid" },
+              timestamp: { $max: "$timestamp" },
+              cpu_percent: { $avg: "$cpu_percent" },
+              mem_total: { $avg: "$mem_total" },
+              mem_used: { $avg: "$mem_used" },
+              mem_percent: { $avg: "$mem_percent" },
+              disk_total: { $avg: "$disk_total" },
+              disk_used: { $avg: "$disk_used" },
+              disk_percent: { $avg: "$disk_percent" },
+              net_rx_bytes: { $avg: "$net_rx_bytes" },
+              net_tx_bytes: { $avg: "$net_tx_bytes" },
+            },
+          },
+          {
+            $group: {
+              _id: "$_id.bucket",
+              timestamp: { $max: "$timestamp" },
+              cpu_percent: { $avg: "$cpu_percent" },
+              mem_total: { $avg: "$mem_total" },
+              mem_used: { $sum: "$mem_used" },
+              mem_percent: { $avg: "$mem_percent" },
+              disk_total: { $avg: "$disk_total" },
+              disk_used: { $avg: "$disk_used" },
+              disk_percent: { $avg: "$disk_percent" },
+              net_rx_bytes: { $sum: "$net_rx_bytes" },
+              net_tx_bytes: { $sum: "$net_tx_bytes" },
+            },
+          },
+          { $sort: { timestamp: 1 } },
+          { $project: { _id: 0 } },
+        ])
+        .toArray();
+      return docs.map((row) => ({
+        ...row,
+        mem_total: Math.round(row.mem_total),
+        mem_used: Math.round(row.mem_used),
+        disk_total: row.disk_total === null ? null : Math.round(row.disk_total),
+        disk_used: row.disk_used === null ? null : Math.round(row.disk_used),
+        net_rx_bytes: Math.round(row.net_rx_bytes),
+        net_tx_bytes: Math.round(row.net_tx_bytes),
+      })) as SystemMetricRow[];
+    }
+
     if (sampleSize) {
       const span = Math.max(range.to - range.from, 1);
       const bucketMs = Math.max(Math.floor(span / sampleSize), 1);
       const docs = await this.systemCol
         .aggregate<SystemMetricRow>([
-          { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+          { $match: baseMatch },
           {
             $group: {
               _id: {
                 $subtract: [
                   "$timestamp",
-                  { $mod: [{ $subtract: ["$timestamp", range.from] }, bucketMs] },
+                  {
+                    $mod: [
+                      { $subtract: ["$timestamp", range.from] },
+                      bucketMs,
+                    ],
+                  },
                 ],
               },
               timestamp: { $max: "$timestamp" },
@@ -211,7 +421,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
     }
 
     const docs = await this.systemCol
-      .find({ timestamp: { $gte: range.from, $lte: range.to } })
+      .find(baseMatch)
       .sort({ timestamp: 1 })
       .toArray();
     return docs as unknown as SystemMetricRow[];
@@ -220,20 +430,93 @@ export class MongoDBAdapter implements DatabaseAdapter {
   async getProcessMetrics(
     range: TimeRange,
     maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<ProcessMetricRow[]> {
     const sampleSize = ensureSampleSize(maxPoints);
+    const baseMatch = {
+      timestamp: { $gte: range.from, $lte: range.to },
+      ...this.instanceMatch(options),
+    };
+
+    if (options?.clusterAggregate) {
+      const span = Math.max(range.to - range.from, 1);
+      const bucketMs = sampleSize
+        ? Math.max(Math.floor(span / sampleSize), 1)
+        : span;
+      const docs = await this.processCol
+        .aggregate<ProcessMetricRow>([
+          { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+          {
+            $addFields: {
+              bucket: {
+                $subtract: [
+                  "$timestamp",
+                  {
+                    $mod: [
+                      { $subtract: ["$timestamp", range.from] },
+                      bucketMs,
+                    ],
+                  },
+                ],
+              },
+              iid: { $ifNull: ["$instance_id", LEGACY_INSTANCE_ID] },
+            },
+          },
+          {
+            $group: {
+              _id: { bucket: "$bucket", iid: "$iid" },
+              timestamp: { $max: "$timestamp" },
+              heap_used: { $avg: "$heap_used" },
+              heap_total: { $avg: "$heap_total" },
+              external_mem: { $avg: "$external_mem" },
+              event_loop_avg_ms: { $avg: "$event_loop_avg_ms" },
+              event_loop_max_ms: { $max: "$event_loop_max_ms" },
+              gc_pause_ms: { $avg: "$gc_pause_ms" },
+              uptime_seconds: { $max: "$uptime_seconds" },
+            },
+          },
+          {
+            $group: {
+              _id: "$_id.bucket",
+              timestamp: { $max: "$timestamp" },
+              heap_used: { $sum: "$heap_used" },
+              heap_total: { $sum: "$heap_total" },
+              external_mem: { $sum: "$external_mem" },
+              event_loop_avg_ms: { $avg: "$event_loop_avg_ms" },
+              event_loop_max_ms: { $max: "$event_loop_max_ms" },
+              gc_pause_ms: { $avg: "$gc_pause_ms" },
+              uptime_seconds: { $max: "$uptime_seconds" },
+            },
+          },
+          { $sort: { timestamp: 1 } },
+          { $project: { _id: 0 } },
+        ])
+        .toArray();
+      return docs.map((row) => ({
+        ...row,
+        heap_used: Math.round(row.heap_used),
+        heap_total: Math.round(row.heap_total),
+        external_mem: Math.round(row.external_mem),
+      })) as ProcessMetricRow[];
+    }
+
     if (sampleSize) {
       const span = Math.max(range.to - range.from, 1);
       const bucketMs = Math.max(Math.floor(span / sampleSize), 1);
       const docs = await this.processCol
         .aggregate<ProcessMetricRow>([
-          { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+          { $match: baseMatch },
           {
             $group: {
               _id: {
                 $subtract: [
                   "$timestamp",
-                  { $mod: [{ $subtract: ["$timestamp", range.from] }, bucketMs] },
+                  {
+                    $mod: [
+                      { $subtract: ["$timestamp", range.from] },
+                      bucketMs,
+                    ],
+                  },
                 ],
               },
               timestamp: { $max: "$timestamp" },
@@ -259,10 +542,157 @@ export class MongoDBAdapter implements DatabaseAdapter {
     }
 
     const docs = await this.processCol
-      .find({ timestamp: { $gte: range.from, $lte: range.to } })
+      .find(baseMatch)
       .sort({ timestamp: 1 })
       .toArray();
     return docs as unknown as ProcessMetricRow[];
+  }
+
+  async getLiveOverview(now: number): Promise<LiveOverviewMetrics> {
+    const minuteRange = { from: now - 60_000, to: now };
+
+    const minuteResult = await this.endpointCol
+      .aggregate<{
+        total_requests: number;
+        total_errors: number;
+      }>([
+        { $match: { timestamp: { $gte: minuteRange.from, $lte: minuteRange.to } } },
+        {
+          $group: {
+            _id: null,
+            total_requests: { $sum: "$request_count" },
+            total_errors: { $sum: "$error_count" },
+          },
+        },
+      ])
+      .toArray();
+
+    const minuteRow = minuteResult[0] ?? { total_requests: 0, total_errors: 0 };
+
+    return {
+      rpm: minuteRow.total_requests,
+      // Derive RPS from the 60s window rather than a single flush window: endpoint
+      // rows are written once per aggregation window, so a narrow window sees 0/1/2
+      // flushes and makes RPS sawtooth. rpm/60 is the smooth per-second average.
+      rps: minuteRow.total_requests / 60,
+      total_requests: minuteRow.total_requests,
+      total_errors: minuteRow.total_errors,
+      error_rate:
+        minuteRow.total_requests > 0
+          ? Math.round(
+              (minuteRow.total_errors / minuteRow.total_requests) * 100 * 100,
+            ) / 100
+          : 0,
+    };
+  }
+
+  async getLifetimeTotals(): Promise<LifetimeTotals> {
+    const [reqDoc, errDoc] = await Promise.all([
+      this.settingsCol.findOne({ key: LIFETIME_TOTAL_REQUESTS_KEY }),
+      this.settingsCol.findOne({ key: LIFETIME_TOTAL_ERRORS_KEY }),
+    ]);
+    return {
+      total_requests: readLifetimeCounter(reqDoc),
+      total_errors: readLifetimeCounter(errDoc),
+    };
+  }
+
+  incrementLifetimeTotals(requests: number, errors: number): void {
+    if (requests === 0 && errors === 0) return;
+    const ops: Promise<unknown>[] = [];
+    if (requests !== 0) {
+      ops.push(
+        this.settingsCol.updateOne(
+          { key: LIFETIME_TOTAL_REQUESTS_KEY },
+          {
+            $inc: { numeric_value: requests },
+            $setOnInsert: {
+              key: LIFETIME_TOTAL_REQUESTS_KEY,
+              value: "0",
+            },
+          },
+          { upsert: true },
+        ),
+      );
+    }
+    if (errors !== 0) {
+      ops.push(
+        this.settingsCol.updateOne(
+          { key: LIFETIME_TOTAL_ERRORS_KEY },
+          {
+            $inc: { numeric_value: errors },
+            $setOnInsert: {
+              key: LIFETIME_TOTAL_ERRORS_KEY,
+              value: "0",
+            },
+          },
+          { upsert: true },
+        ),
+      );
+    }
+    fireAndForget(Promise.all(ops), "MongoDB incrementLifetimeTotals");
+  }
+
+  async getClusterSystemLive(lookbackMs: number): Promise<SystemMetricRow | null> {
+    const since = Date.now() - lookbackMs;
+    const docs = await this.systemCol
+      .aggregate<SystemMetricRow>([
+        { $match: { timestamp: { $gte: since } } },
+        { $sort: { timestamp: -1 } },
+        {
+          $group: {
+            _id: { $ifNull: ["$instance_id", LEGACY_INSTANCE_ID] },
+            doc: { $first: "$$ROOT" },
+          },
+        },
+        { $replaceRoot: { newRoot: "$doc" } },
+      ])
+      .toArray();
+    if (docs.length === 0) return null;
+    return aggregateSystemRows(docs as SystemMetricRow[]);
+  }
+
+  async getClusterProcessLive(lookbackMs: number): Promise<ProcessMetricRow | null> {
+    const since = Date.now() - lookbackMs;
+    const docs = await this.processCol
+      .aggregate<ProcessMetricRow>([
+        { $match: { timestamp: { $gte: since } } },
+        { $sort: { timestamp: -1 } },
+        {
+          $group: {
+            _id: { $ifNull: ["$instance_id", LEGACY_INSTANCE_ID] },
+            doc: { $first: "$$ROOT" },
+          },
+        },
+        { $replaceRoot: { newRoot: "$doc" } },
+      ])
+      .toArray();
+    if (docs.length === 0) return null;
+    return aggregateProcessRows(docs as ProcessMetricRow[]);
+  }
+
+  async listInstances(range: TimeRange): Promise<string[]> {
+    const timeFilter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const [systemIds, processIds, endpointIds] = await Promise.all([
+      this.systemCol.distinct("instance_id", timeFilter),
+      this.processCol.distinct("instance_id", timeFilter),
+      this.endpointCol.distinct("instance_id", timeFilter),
+    ]);
+    const ids = new Set<string>();
+    for (const id of [...systemIds, ...processIds, ...endpointIds]) {
+      ids.add(typeof id === "string" && id.trim() ? id : LEGACY_INSTANCE_ID);
+    }
+    return [...ids].sort().slice(0, MAX_INSTANCES_LIST);
+  }
+
+  async countInstances(range: TimeRange): Promise<number> {
+    const timeFilter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const ids = await this.endpointCol.distinct("instance_id", timeFilter);
+    const unique = new Set<string>();
+    for (const id of ids) {
+      unique.add(typeof id === "string" && id.trim() ? id : LEGACY_INSTANCE_ID);
+    }
+    return unique.size;
   }
 
   async getEndpointMetrics(
@@ -507,8 +937,12 @@ export class MongoDBAdapter implements DatabaseAdapter {
     range: TimeRange,
     pagination: PaginationParams,
     _maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<PaginatedResult<SystemMetricRow>> {
-    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const filter = {
+      timestamp: { $gte: range.from, $lte: range.to },
+      ...this.instanceMatch(options),
+    };
     const [total, docs] = await Promise.all([
       this.systemCol.countDocuments(filter),
       this.systemCol
@@ -525,8 +959,12 @@ export class MongoDBAdapter implements DatabaseAdapter {
     range: TimeRange,
     pagination: PaginationParams,
     _maxPoints?: number,
+    options?: MetricsQueryOptions,
   ): Promise<PaginatedResult<ProcessMetricRow>> {
-    const filter = { timestamp: { $gte: range.from, $lte: range.to } };
+    const filter = {
+      timestamp: { $gte: range.from, $lte: range.to },
+      ...this.instanceMatch(options),
+    };
     const [total, docs] = await Promise.all([
       this.processCol.countDocuments(filter),
       this.processCol

@@ -36,6 +36,11 @@ interface LoadFluxConfig {
   listenHost?: string;
   /** Use `X-Forwarded-For` for login rate limiting (env: `LOADFLUX_TRUST_PROXY`) */
   trustProxy?: boolean;
+  /** Multi-instance aggregation (requires MongoDB for multiple writers). */
+  cluster?: {
+    enabled?: boolean;
+    instanceId?: string;
+  };
 }
 ```
 
@@ -125,7 +130,7 @@ How often buffered request metrics are flushed to the database. During each flus
 | **Default** | `90` |
 | **Minimum** | `1` |
 
-Number of days to keep metrics data. A daily cron job deletes older records.
+Number of days to keep metrics data. A daily cron job deletes older records. The dashboard **Settings** page can override this at runtime (`retention_days` in the database); the cron uses that value when set.
 
 ### `retention.cronExpression`
 
@@ -199,6 +204,31 @@ Explicit bind host of your HTTP server. Only needed for `disableOnLocalhost` (an
 
 When `true`, login **rate limiting** uses the client IP from `X-Forwarded-For` (first hop). Enable only behind a **trusted** reverse proxy that sets this header correctly. You can also set `LOADFLUX_TRUST_PROXY=1`.
 
+### `cluster`
+
+| | |
+|---|---|
+| **Type** | `{ enabled?: boolean; instanceId?: string }` |
+| **Default** | `{ enabled: false, instanceId: from env/hostname }` |
+
+Enable **cluster mode** when multiple containers share one MongoDB database. Each replica tags metrics with an `instance_id`; the dashboard aggregates live and historical views across replicas.
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | `true` to aggregate cluster-wide (requires `database.adapter: "mongodb"`) |
+| `instanceId` | Per-container ID; defaults to `LOADFLUX_INSTANCE_ID`, then `HOSTNAME`, then `os.hostname()` |
+
+See [Multi-instance deployment](/docs/guides/multi-instance) for App Runner / Kubernetes setup.
+
+## Environment variables
+
+| Variable | Config field |
+|----------|----------------|
+| `LOADFLUX_LISTEN_HOST` / `HOST` | `listenHost` |
+| `LOADFLUX_TRUST_PROXY` | `trustProxy` |
+| `LOADFLUX_INSTANCE_ID` | `cluster.instanceId` (when unset in config) |
+| `LOADFLUX_USERNAME` / `LOADFLUX_PASSWORD` | Passed through app config as `auth` |
+
 ## Full example with all options
 
 ```typescript
@@ -225,5 +255,9 @@ app.use(loadflux({
   disableOnLocalhost: true,
   listenHost: "0.0.0.0", // must match app.listen host when using disableOnLocalhost
   trustProxy: true, // only behind a trusted reverse proxy
+  cluster: {
+    enabled: true,
+    instanceId: process.env.LOADFLUX_INSTANCE_ID,
+  },
 }));
 ```

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Doughnut } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
 import { useTheme } from "../../hooks/useTheme";
@@ -18,7 +18,7 @@ function getColor(value: number, max: number): string {
   return "#ef4444";
 }
 
-export function GaugeChart({ value, max = 100, label, color, suffix = "%" }: Props) {
+export const GaugeChart = memo(function GaugeChart({ value, max = 100, label, color, suffix = "%" }: Props) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const clamped = Math.min(Math.max(value, 0), max);
@@ -69,4 +69,4 @@ export function GaugeChart({ value, max = 100, label, color, suffix = "%" }: Pro
       </span>
     </div>
   );
-}
+});

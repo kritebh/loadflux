@@ -62,6 +62,8 @@ On the **Endpoints** page, a search box filters top endpoints, the endpoint metr
 
 On the **Errors** page, search narrows the error log; you can also filter by **HTTP status code** for the current time range (`status` query parameter).
 
+See [REST API](/docs/api-reference/rest-api) for all query parameters.
+
 ## Excluding routes
 
 To exclude specific routes from monitoring:

@@ -1,31 +1,36 @@
-import { useState } from "react";
+import { memo, useState, useCallback } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
+import { ConnectionStatus } from "./ConnectionStatus";
 import { logout } from "../api/client";
 
 interface Props {
   theme: "light" | "dark";
   toggleTheme: () => void;
-  connected: boolean;
 }
 
-export function Layout({ theme, toggleTheme, connected }: Props) {
+const MemoOutlet = memo(function MemoOutlet() {
+  return <Outlet />;
+});
+
+export function Layout({ theme, toggleTheme }: Props) {
   const handleLogout = async () => {
     await logout();
     window.location.reload();
   };
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const openSidebar = useCallback(() => setSidebarOpen(true), []);
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar open={sidebarOpen} onClose={closeSidebar} />
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
         <header className="flex items-center justify-between h-16 px-4 lg:px-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
           <button
-            onClick={() => setSidebarOpen(true)}
+            onClick={openSidebar}
             className="lg:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -36,18 +41,7 @@ export function Layout({ theme, toggleTheme, connected }: Props) {
           <div className="flex-1" />
 
           <div className="flex items-center gap-3">
-            {/* Connection status */}
-            <div className="flex items-center gap-2 text-sm">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  connected ? "bg-emerald-500" : "bg-red-500"
-                }`}
-              />
-              <span className="text-gray-500 dark:text-gray-400 hidden sm:inline">
-                {connected ? "Live" : "Disconnected"}
-              </span>
-            </div>
-
+            <ConnectionStatus />
             <ThemeToggle theme={theme} toggle={toggleTheme} />
 
             <button
@@ -62,9 +56,8 @@ export function Layout({ theme, toggleTheme, connected }: Props) {
           </div>
         </header>
 
-        {/* Page content */}
         <main className="flex-1 overflow-auto p-4 lg:p-6">
-          <Outlet />
+          <MemoOutlet />
         </main>
       </div>
     </div>

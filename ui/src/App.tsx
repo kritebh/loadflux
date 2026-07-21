@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import {
   Chart as ChartJS,
@@ -13,7 +13,7 @@ import {
   Legend,
   Filler,
 } from "chart.js";
-import { useTheme } from "./hooks/useTheme";
+import { ThemeProvider, useTheme } from "./hooks/useTheme";
 import { useSSEConnectionProvider, SSEConnectionContext } from "./hooks/useSSE";
 import { checkAuthStatus, getAppBasePath } from "./api/client";
 import { Layout } from "./components/Layout";
@@ -43,16 +43,16 @@ type AuthState = "loading" | "login" | "setup" | "authenticated";
 function AuthenticatedApp() {
   const { theme, toggle } = useTheme();
   const { connected } = useSSEConnectionProvider();
+  const sseContextValue = useMemo(() => ({ connected }), [connected]);
 
   return (
-    <SSEConnectionContext.Provider value={{ connected }}>
+    <SSEConnectionContext.Provider value={sseContextValue}>
       <Routes>
         <Route
           element={
             <Layout
               theme={theme}
               toggleTheme={toggle}
-              connected={connected}
             />
           }
         >
@@ -69,7 +69,7 @@ function AuthenticatedApp() {
   );
 }
 
-export function App() {
+function AppContent() {
   const [authState, setAuthState] = useState<AuthState>("loading");
 
   useEffect(() => {
@@ -84,7 +84,6 @@ export function App() {
         }
       })
       .catch(() => {
-        // Network / server errors — do not open the dashboard without a verified session
         setAuthState("login");
       });
   }, []);
@@ -112,5 +111,13 @@ export function App() {
     <BrowserRouter basename={basePath}>
       <AuthenticatedApp />
     </BrowserRouter>
+  );
+}
+
+export function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
   );
 }

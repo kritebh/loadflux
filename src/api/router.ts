@@ -5,6 +5,7 @@ import type {
   TopEndpointMetric,
   PaginationParams,
   QueryFilter,
+  MetricsQueryOptions,
 } from "../types.js";
 import { isAuthenticated } from "../auth/middleware.js";
 import {
@@ -12,6 +13,11 @@ import {
   createToken,
   trySetupInitialUser,
 } from "../auth/auth.js";
+import { MAX_INSTANCE_ID_LENGTH } from "../db/constants.js";
+
+const SSE_MAX_DRAIN_SKIPS = 5;
+const SSE_MAX_BUFFER_BYTES = 1024 * 1024;
+const EXPORT_SERIES_MAX_POINTS = 500;
 
 function isSecure(req: IncomingMessage, trustProxy: boolean): boolean {
   if ((req.socket as any).encrypted) return true;
@@ -116,6 +122,24 @@ function resolveSeriesMaxPoints(
   if (explicit !== undefined) return explicit;
   if (range.to - range.from >= LONG_RANGE_AUTO_SAMPLE_MS) {
     return LONG_RANGE_AUTO_MAX_POINTS;
+  }
+  return undefined;
+}
+
+function parseMetricsQueryOptions(
+  query: URLSearchParams,
+  clusterEnabled: boolean,
+): MetricsQueryOptions | undefined {
+  const raw = query.get("instance")?.trim();
+  if (raw) {
+    const instanceId =
+      raw.length > MAX_INSTANCE_ID_LENGTH
+        ? raw.slice(0, MAX_INSTANCE_ID_LENGTH)
+        : raw;
+    return { instanceId };
+  }
+  if (clusterEnabled) {
+    return { clusterAggregate: true };
   }
   return undefined;
 }
@@ -230,6 +254,19 @@ export function createApiHandler(ctx: MiddlewareContext) {
   const basePath = config.path;
   const trustProxy = config.trustProxy;
   const sseClients = new Set<ServerResponse>();
+  const sseWaitingDrain = new WeakSet<ServerResponse>();
+  const sseDrainSkips = new WeakMap<ServerResponse, number>();
+
+  const dropSseClient = (client: ServerResponse) => {
+    sseClients.delete(client);
+    sseWaitingDrain.delete(client);
+    sseDrainSkips.delete(client);
+    try {
+      if (!client.writableEnded && !client.destroyed) client.destroy();
+    } catch {
+      // ignore
+    }
+  };
 
   // Push SSE updates every 2 seconds
   let ssePending = false;
@@ -237,10 +274,46 @@ export function createApiHandler(ctx: MiddlewareContext) {
     if (sseClients.size === 0 || ssePending) return;
     ssePending = true;
     try {
+      // Drop half-closed sockets left behind by proxies / browser reconnects
+      for (const client of sseClients) {
+        if (client.writableEnded || client.destroyed) {
+          dropSseClient(client);
+        }
+      }
+      if (sseClients.size === 0) return;
+
       const snapshot = await metricsStore.getCurrentSnapshot(sseClients.size);
       const data = `data: ${JSON.stringify(snapshot)}\n\n`;
       for (const client of sseClients) {
-        client.write(data);
+        try {
+          if (client.writableEnded || client.destroyed) {
+            dropSseClient(client);
+            continue;
+          }
+          if (sseWaitingDrain.has(client)) {
+            const skips = (sseDrainSkips.get(client) ?? 0) + 1;
+            sseDrainSkips.set(client, skips);
+            const buffered =
+              typeof client.writableLength === "number"
+                ? client.writableLength
+                : 0;
+            if (skips >= SSE_MAX_DRAIN_SKIPS || buffered > SSE_MAX_BUFFER_BYTES) {
+              dropSseClient(client);
+            }
+            continue;
+          }
+          const ok = client.write(data);
+          if (!ok) {
+            sseWaitingDrain.add(client);
+            sseDrainSkips.set(client, 0);
+            client.once("drain", () => {
+              sseWaitingDrain.delete(client);
+              sseDrainSkips.delete(client);
+            });
+          }
+        } catch {
+          dropSseClient(client);
+        }
       }
     } catch (err) {
       console.error("[LoadFlux] SSE snapshot push failed:", err);
@@ -298,7 +371,7 @@ export function createApiHandler(ctx: MiddlewareContext) {
         }
 
         clearLoginAttempts(clientIp);
-        const token = await createToken(body.username, db);
+        const token = await createToken(String(body.username), db);
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Set-Cookie": buildCookieHeader(token, basePath, req, trustProxy),
@@ -370,32 +443,66 @@ export function createApiHandler(ctx: MiddlewareContext) {
           Connection: "keep-alive",
         });
         sseClients.add(res);
-        req.on("close", () => sseClients.delete(res));
+        const remove = () => {
+          sseClients.delete(res);
+          sseWaitingDrain.delete(res);
+          sseDrainSkips.delete(res);
+        };
+        req.on("close", remove);
+        req.on("aborted", remove);
+        res.on("close", remove);
+        res.on("error", remove);
         return;
       }
 
       const range = parseTimeRange(query);
       const seriesMaxPoints = resolveSeriesMaxPoints(query, range);
       const filter = parseFilter(query);
+      const metricsOptions = parseMetricsQueryOptions(
+        query,
+        config.cluster.enabled,
+      );
 
       // Routes
       switch (apiPath) {
+        case "/instances": {
+          const instances = await db.listInstances(range);
+          return json(res, { instances });
+        }
         case "/system": {
           const pg = parsePagination(query);
           if (pg) {
-            const result = await db.getSystemMetricsPaginated(range, pg, seriesMaxPoints);
+            const result = await db.getSystemMetricsPaginated(
+              range,
+              pg,
+              seriesMaxPoints,
+              metricsOptions,
+            );
             return json(res, result);
           }
-          const data = await db.getSystemMetrics(range, seriesMaxPoints);
+          const data = await db.getSystemMetrics(
+            range,
+            seriesMaxPoints,
+            metricsOptions,
+          );
           return json(res, data);
         }
         case "/process": {
           const pg = parsePagination(query);
           if (pg) {
-            const result = await db.getProcessMetricsPaginated(range, pg, seriesMaxPoints);
+            const result = await db.getProcessMetricsPaginated(
+              range,
+              pg,
+              seriesMaxPoints,
+              metricsOptions,
+            );
             return json(res, result);
           }
-          const data = await db.getProcessMetrics(range, seriesMaxPoints);
+          const data = await db.getProcessMetrics(
+            range,
+            seriesMaxPoints,
+            metricsOptions,
+          );
           return json(res, data);
         }
         case "/endpoints": {
@@ -459,8 +566,16 @@ export function createApiHandler(ctx: MiddlewareContext) {
             );
           }
           const [system, process, endpoints, errors] = await Promise.all([
-            db.getSystemMetrics(range),
-            db.getProcessMetrics(range),
+            db.getSystemMetrics(
+              range,
+              EXPORT_SERIES_MAX_POINTS,
+              config.cluster.enabled ? { clusterAggregate: true } : undefined,
+            ),
+            db.getProcessMetrics(
+              range,
+              EXPORT_SERIES_MAX_POINTS,
+              config.cluster.enabled ? { clusterAggregate: true } : undefined,
+            ),
             db.getEndpointMetrics(range),
             db.getErrorLog(range),
           ]);

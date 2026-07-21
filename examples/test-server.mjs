@@ -7,6 +7,16 @@ import { dirname, resolve } from "path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: resolve(__dirname, "../.env.example") });
 
+const PORT = Number(process.env.PORT) || 3456;
+const mongoUri =
+  process.env.MONGODB_URI ||
+  process.env.LOADFLUX_MONGODB_URI ||
+  "mongodb://127.0.0.1:27017/loadflux";
+
+const clusterEnabled =
+  process.env.LOADFLUX_CLUSTER === "1" ||
+  process.env.LOADFLUX_CLUSTER === "true";
+
 const app = express();
 
 // Mount loadflux - dashboard at /loadflux, API at /loadflux/api/*
@@ -17,8 +27,27 @@ app.use(
       username: process.env.LOADFLUX_USERNAME || "admin",
       password: process.env.LOADFLUX_PASSWORD || "admin123",
     },
+    ...(clusterEnabled
+      ? {
+          database: {
+            adapter: "mongodb",
+            connectionString: mongoUri,
+          },
+          cluster: {
+            enabled: true,
+          },
+          // Only enable behind a reverse proxy that overwrites X-Forwarded-For.
+          // Not required for cluster mode itself.
+          trustProxy: process.env.LOADFLUX_TRUST_PROXY === "1",
+          excludeRoutes: ["/health"],
+        }
+      : {}),
   }),
 );
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
 
 // Sample API routes to generate metrics
 app.get("/", (req, res) => {
@@ -60,49 +89,13 @@ app.get("/api/notfound", (req, res) => {
   res.status(404).json({ error: "Not Found" });
 });
 
-const PORT = 3456;
 app.listen(PORT, () => {
   console.log(`\nTest server running on http://localhost:${PORT}`);
-  console.log(`\nLoadFlux API endpoints:`);
-  console.log(
-    `  Login:         POST http://localhost:${PORT}/loadflux/api/login`,
-  );
-  console.log(
-    `  Overview:      GET  http://localhost:${PORT}/loadflux/api/overview`,
-  );
-  console.log(
-    `  System:        GET  http://localhost:${PORT}/loadflux/api/system`,
-  );
-  console.log(
-    `  Process:       GET  http://localhost:${PORT}/loadflux/api/process`,
-  );
-  console.log(
-    `  Endpoints:     GET  http://localhost:${PORT}/loadflux/api/endpoints`,
-  );
-  console.log(
-    `  Top endpoints: GET  http://localhost:${PORT}/loadflux/api/endpoints/top?metric=request_count`,
-  );
-  console.log(
-    `  Slow requests: GET  http://localhost:${PORT}/loadflux/api/endpoints/slow`,
-  );
-  console.log(
-    `  Errors:        GET  http://localhost:${PORT}/loadflux/api/errors`,
-  );
-  console.log(
-    `  Status dist:   GET  http://localhost:${PORT}/loadflux/api/errors/distribution`,
-  );
-  console.log(
-    `  Live snapshot: GET  http://localhost:${PORT}/loadflux/api/snapshot`,
-  );
-  console.log(
-    `  SSE stream:    GET  http://localhost:${PORT}/loadflux/api/sse`,
-  );
-  console.log(
-    `  Export:        GET  http://localhost:${PORT}/loadflux/api/export`,
-  );
-  console.log(
-    `  Settings:      GET  http://localhost:${PORT}/loadflux/api/settings`,
-  );
+  if (clusterEnabled) {
+    console.log(`  MongoDB: ${mongoUri}`);
+    console.log(`  Cluster: enabled`);
+  }
+  console.log(`\nDashboard: http://localhost:${PORT}/loadflux`);
   console.log(`\nSample app routes (generate metrics by hitting these):`);
   console.log(`  http://localhost:${PORT}/`);
   console.log(`  http://localhost:${PORT}/api/users`);

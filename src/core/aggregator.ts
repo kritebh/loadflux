@@ -17,7 +17,8 @@ export class Aggregator {
 
   constructor(
     private db: DatabaseAdapter,
-    private windowMs: number
+    private windowMs: number,
+    private instanceId: string,
   ) {}
 
   start(): void {
@@ -89,6 +90,7 @@ export class Aggregator {
         if (code >= 400) {
           errors.push({
             timestamp: r.timestamp,
+            instance_id: this.instanceId,
             method: r.method,
             path: r.path,
             status_code: r.statusCode,
@@ -103,6 +105,7 @@ export class Aggregator {
 
       endpointRows.push({
         timestamp,
+        instance_id: this.instanceId,
         method,
         path,
         request_count: records.length,

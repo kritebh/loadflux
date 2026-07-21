@@ -61,10 +61,9 @@ app.use(loadflux({
 
 ### How it works
 
-- Uses the official `mongodb` driver (>= 6.0.0)
+- Uses the official `mongodb` driver (peer dependency `>= 5`)
 - Collections mirror the SQLite schema: `system_metrics`, `process_metrics`, `endpoint_metrics`, `error_log`, `settings`, `auth`
-- Uses MongoDB's native **TTL indexes** on `timestamp` for automatic data retention (no cron needed)
-- Indexes created automatically: `{ timestamp: 1 }` on all metric collections, `{ method: 1, path: 1 }` on `endpoint_metrics`
+- Indexes created automatically: `{ timestamp: 1 }` and `{ instance_id: 1, timestamp: 1 }` on metric collections, `{ method: 1, path: 1 }` on `endpoint_metrics`
 - Bulk insert via `insertMany` for aggregator flushes
 
 ### When to use MongoDB
@@ -78,7 +77,8 @@ You can switch between SQLite and MongoDB at any time by changing the configurat
 
 ## Data retention
 
-Both adapters support automatic data cleanup:
+Both adapters use the same retention logic:
 
-- **SQLite**: A daily cron job (configurable via `retention.cronExpression`) deletes records older than `retention.days`
-- **MongoDB**: Uses TTL indexes that automatically expire documents based on the `timestamp` field
+- A daily cron job (configurable via `retention.cronExpression`) calls `deleteOlderThan` on all metric collections/tables
+- The cutoff uses `retention_days` from dashboard settings when set, otherwise `retention.days` (default **90**)
+- **Lifetime total request/error counters** are stored separately and are **not** decreased when old metric rows are deleted

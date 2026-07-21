@@ -21,7 +21,7 @@ describe("SQLiteAdapter", () => {
   it("creates database and runs migrations", async () => {
     expect(fs.existsSync(dbPath)).toBe(true);
     const version = await db.getSetting("schema_version");
-    expect(version).toBe("1");
+    expect(version).toBe("2");
   });
 
   it("inserts and queries system metrics", async () => {

@@ -37,11 +37,11 @@ interface DashboardSnapshot {
     uptime_seconds: number;
   };
   overview: {
-    rps: number;
-    rpm: number;
-    total_requests: number;
-    error_rate: number;
-    avg_duration: number;
+    rps: number;            // Live: current second (single) or ~aggregation-window avg (cluster)
+    rpm: number;            // Live: last 60 seconds
+    total_requests: number; // Lifetime counter (O(1); not reduced by retention)
+    error_rate: number;     // From lifetime totals (errors / requests)
+    avg_duration: number;   // Last hour (from DB)
     p95_duration: number;
     p99_duration: number;
   };
@@ -55,18 +55,30 @@ interface DashboardSnapshot {
     node_version: string;
     platform: string;
     pid: number;
-    sse_connections: number;
+    sse_connections: number; // Connections on this serving instance only
+    instance_id?: string;
+    cluster_instances?: number;
+    cluster_enabled?: boolean;
   };
   timestamp: number;
 }
 ```
+
+### Overview field meanings
+
+| Field | Meaning |
+|-------|---------|
+| `rps` / `rpm` | Live traffic rate (rolling windows; cluster mode sums recent endpoint metrics) |
+| `total_requests` | O(1) **lifetime** counter (seeded once from existing data, then incremented on each flush; shared in cluster mode; not reduced when retention deletes old rows) |
+| `error_rate` | Derived from lifetime total requests and errors |
+| Latency percentiles | Last-hour DB overview (approximate across instances) |
 
 ## Dashboard pages using SSE
 
 - **Dashboard (Home)** — All stat cards and top endpoint tables
 - **App Metrics** — Uptime counter updates in real-time
 
-Other pages (System, Endpoints, Errors) fetch data from the REST API using the selected time range.
+Other pages (System, Endpoints, Errors) fetch data from the REST API using the selected time range. See [REST API](/docs/api-reference/rest-api).
 
 ## SSE vs REST API
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 interface Props {
   title: string;
@@ -16,7 +16,7 @@ const COLOR_MAP = {
   cyan: "bg-cyan-50 dark:bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
 };
 
-export function StatCard({ title, value, subtitle, icon, color = "blue" }: Props) {
+export const StatCard = memo(function StatCard({ title, value, subtitle, icon, color = "blue" }: Props) {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
       <div className="flex items-start justify-between">
@@ -37,4 +37,4 @@ export function StatCard({ title, value, subtitle, icon, color = "blue" }: Props
       </div>
     </div>
   );
-}
+});

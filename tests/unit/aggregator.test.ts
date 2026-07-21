@@ -3,6 +3,8 @@ import { Aggregator } from "../../src/core/aggregator.js";
 import { SQLiteAdapter } from "../../src/db/sqlite.js";
 import { tmpDbPath, cleanupSqliteDb } from "../helpers/db.js";
 
+const TEST_INSTANCE = "test-instance";
+
 describe("Aggregator", () => {
   let db: SQLiteAdapter;
   let dbPath: string;
@@ -19,7 +21,7 @@ describe("Aggregator", () => {
   });
 
   it("buffers records and flushes to DB on stop", async () => {
-    const agg = new Aggregator(db, 60_000); // long window so it won't auto-flush
+    const agg = new Aggregator(db, 60_000, TEST_INSTANCE); // long window so it won't auto-flush
     agg.start();
 
     const now = Date.now();
@@ -58,7 +60,7 @@ describe("Aggregator", () => {
   });
 
   it("logs errors to error_log table", async () => {
-    const agg = new Aggregator(db, 60_000);
+    const agg = new Aggregator(db, 60_000, TEST_INSTANCE);
     agg.start();
 
     const now = Date.now();
@@ -81,7 +83,7 @@ describe("Aggregator", () => {
   });
 
   it("computes percentiles correctly", async () => {
-    const agg = new Aggregator(db, 60_000);
+    const agg = new Aggregator(db, 60_000, TEST_INSTANCE);
     agg.start();
 
     const now = Date.now();

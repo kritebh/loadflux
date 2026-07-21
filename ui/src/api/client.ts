@@ -96,17 +96,35 @@ export function setupAuth(username: string, password: string) {
 }
 
 // System
-export function fetchSystemMetrics(from: number, to: number, maxPoints?: number) {
+export function fetchSystemMetrics(
+  from: number,
+  to: number,
+  maxPoints?: number,
+  instance?: string,
+) {
   let url = `/system?from=${from}&to=${to}`;
   if (maxPoints) url += `&max_points=${maxPoints}`;
+  if (instance) url += `&instance=${encodeURIComponent(instance)}`;
   return apiFetch<SystemMetricRow[]>(url);
 }
 
 // Process
-export function fetchProcessMetrics(from: number, to: number, maxPoints?: number) {
+export function fetchProcessMetrics(
+  from: number,
+  to: number,
+  maxPoints?: number,
+  instance?: string,
+) {
   let url = `/process?from=${from}&to=${to}`;
   if (maxPoints) url += `&max_points=${maxPoints}`;
+  if (instance) url += `&instance=${encodeURIComponent(instance)}`;
   return apiFetch<ProcessMetricRow[]>(url);
+}
+
+export function fetchInstances(from: number, to: number) {
+  return apiFetch<{ instances: string[] }>(
+    `/instances?from=${from}&to=${to}`,
+  );
 }
 
 // Endpoints
@@ -343,6 +361,9 @@ export interface DashboardSnapshot {
     platform: string;
     pid: number;
     sse_connections: number;
+    instance_id?: string;
+    cluster_instances?: number;
+    cluster_enabled?: boolean;
   };
   timestamp: number;
 }

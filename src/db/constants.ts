@@ -16,6 +16,29 @@ export const TABLE_AUTH = "loadflux_auth";
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
+/** Rows written before instance tagging use this sentinel in queries. */
+export const LEGACY_INSTANCE_ID = "legacy";
+
+/** Incremental lifetime counters (avoid full-collection scans on the snapshot hot path). */
+export const LIFETIME_TOTAL_REQUESTS_KEY = "lifetime_total_requests";
+export const LIFETIME_TOTAL_ERRORS_KEY = "lifetime_total_errors";
+export const LIFETIME_TOTALS_SEEDED_KEY = "lifetime_totals_seeded";
+
+/** Set once the legacy-instance_id backfill has run, so it is not re-run every boot. */
+export const INSTANCE_BACKFILL_DONE_KEY = "instance_backfill_done";
+
+/** Max length for `?instance=` query values. */
+export const MAX_INSTANCE_ID_LENGTH = 128;
+
+/** Cap for `/instances` list responses. */
+export const MAX_INSTANCES_LIST = 200;
+
+export function normalizeInstanceId(
+  instanceId: string | null | undefined,
+): string {
+  return instanceId?.trim() || LEGACY_INSTANCE_ID;
+}
+
 // Shared fallbacks and helpers
 export const EMPTY_STATUS_DISTRIBUTION: StatusDistribution = {
   status_2xx: 0,

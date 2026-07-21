@@ -1,0 +1,98 @@
+.container {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 0.75rem;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--ifm-font-color-base);
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.button:hover {
+  background: var(--ifm-color-emphasis-100);
+  border-color: var(--ifm-color-emphasis-400);
+}
+
+.leadIcon {
+  color: var(--ifm-color-primary);
+}
+
+.chevron {
+  color: var(--ifm-color-emphasis-600);
+  margin-left: 1px;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 260px;
+  padding: 6px;
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+}
+
+[data-theme="dark"] .menu {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--ifm-font-color-base);
+}
+
+.item:hover {
+  background: var(--ifm-color-emphasis-100);
+}
+
+.itemIcon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.itemLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.itemDesc {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--ifm-color-emphasis-600);
+}
+
+/* On narrow screens keep the menu within the viewport */
+@media (max-width: 500px) {
+  .menu {
+    min-width: 220px;
+  }
+}

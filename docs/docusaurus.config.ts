@@ -7,7 +7,7 @@ const config: Config = {
   tagline: "Lightweight server monitoring dashboard for Node.js",
   favicon: "img/favicon.svg",
 
-  url: "https://loadflux.dev",
+  url: "https://loadflux.kritebh.dev",
   baseUrl: "/",
 
   organizationName: "kritebh",
@@ -52,6 +52,30 @@ const config: Config = {
           customCss: "./src/css/custom.css",
         },
       } satisfies Preset.Options,
+    ],
+  ],
+
+  plugins: [
+    // Generates LLM-friendly docs at build time:
+    //   /llms.txt        — hierarchical index of every doc page
+    //   /llms-full.txt   — all doc content concatenated in one file
+    //   /docs/**.md      — clean Markdown twin of each page (from rendered HTML)
+    // The on-page "Copy page" button (src/theme/DocItem/Content) consumes the .md twins.
+    [
+      "@signalwire/docusaurus-plugin-llms-txt",
+      {
+        siteTitle: "LoadFlux",
+        siteDescription:
+          "Lightweight in-process server monitoring dashboard for Node.js (Express & Fastify).",
+        depth: 2,
+        content: {
+          enableMarkdownFiles: true,
+          enableLlmsFullTxt: true,
+          includeDocs: true,
+          includeBlog: false,
+          includePages: false,
+        },
+      },
     ],
   ],
 

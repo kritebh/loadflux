@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Doughnut } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
 import { useTheme } from "../../hooks/useTheme";
@@ -14,7 +14,7 @@ interface Props {
   height?: number;
 }
 
-export function DoughnutChart({ labels, data, colors, height = 250 }: Props) {
+export const DoughnutChart = memo(function DoughnutChart({ labels, data, colors, height = 250 }: Props) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -61,4 +61,4 @@ export function DoughnutChart({ labels, data, colors, height = 250 }: Props) {
       <Doughnut data={chartData} options={options} />
     </div>
   );
-}
+});

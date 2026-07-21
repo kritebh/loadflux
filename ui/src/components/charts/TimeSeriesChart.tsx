@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Line } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
 import { useTheme } from "../../hooks/useTheme";
@@ -25,7 +25,7 @@ interface Props {
   height?: number;
 }
 
-export function TimeSeriesChart({ labels, datasets, yLabel, yMax, height = 250 }: Props) {
+export const TimeSeriesChart = memo(function TimeSeriesChart({ labels, datasets, yLabel, yMax, height = 250 }: Props) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -52,6 +52,10 @@ export function TimeSeriesChart({ labels, datasets, yLabel, yMax, height = 250 }
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      // Data arrives pre-parsed and time-ordered from the API, so Chart.js
+      // can skip its internal normalization pass.
+      normalized: true,
+      spanGaps: true,
       animations: {
         colors: false,
         numbers: false,
@@ -102,4 +106,4 @@ export function TimeSeriesChart({ labels, datasets, yLabel, yMax, height = 250 }
       <Line data={data} options={options} />
     </div>
   );
-}
+});

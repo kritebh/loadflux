@@ -75,6 +75,18 @@ describe("createStaticHandler", () => {
     expect(res.body).toBe("console.log('ok');");
   });
 
+  it("serves cached asset bytes without re-reading disk", async () => {
+    const handler = createStaticHandler(basePath);
+    const first = await request(handler, `${basePath}/assets/app.js`);
+    expect(first.body).toBe("console.log('ok');");
+
+    // Remove the file: a cached buffer must still serve it (no disk re-read).
+    fs.rmSync(path.join(tmpDir, "dist-ui", "assets", "app.js"));
+    const second = await request(handler, `${basePath}/assets/app.js`);
+    expect(second.status).toBe(200);
+    expect(second.body).toBe("console.log('ok');");
+  });
+
   it("blocks path traversal to files outside dist-ui", async () => {
     const handler = createStaticHandler(basePath);
     const res = await request(handler, `${basePath}/../../secret.db`);

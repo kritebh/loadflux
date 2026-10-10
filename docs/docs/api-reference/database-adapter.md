@@ -80,6 +80,9 @@ interface DatabaseAdapter {
   ): Promise<ProcessMetricRow[]>;
   getLiveOverview(now: number): Promise<LiveOverviewMetrics>;
   getLifetimeTotals(): Promise<LifetimeTotals>;
+  getOldestEndpointMetricTimestamp(): Promise<number | null>;
+  getMetricsMonitoringSinceMs(): Promise<number | null>;
+  getEndpointRequestTotal(range: TimeRange): Promise<number>;
   incrementLifetimeTotals(requests: number, errors: number): void;
   getClusterSystemLive(lookbackMs: number): Promise<SystemMetricRow | null>;
   getClusterProcessLive(lookbackMs: number): Promise<ProcessMetricRow | null>;
@@ -186,7 +189,10 @@ Insert methods are synchronous (fire-and-forget). They don't return promises bec
 ### Live vs historical metrics
 
 - **`getLiveOverview`** — Short-window RPS/RPM and related live fields used internally before the dashboard snapshot is built.
+- **`getEndpointRequestTotal`** — Sum of `request_count` in `endpoint_metrics` for a range; used for **Daily RPS** on the dashboard (`total / 86,400` for the rolling last 24 hours).
 - **`getLifetimeTotals` / `incrementLifetimeTotals`** — O(1) counters for **Total Requests** and errors on the live dashboard. Seeded once from existing `endpoint_metrics`, then incremented on each flush. **Not** reduced when retention deletes old rows.
+- **`getMetricsMonitoringSinceMs`** — First flush timestamp (`metrics_first_seen_ms` in settings); used for lifetime stat subtitles.
+- **`getOldestEndpointMetricTimestamp`** — `MIN(timestamp)` in `endpoint_metrics` (oldest row still stored).
 - **`getClusterSystemLive` / `getClusterProcessLive`** — Latest sample per `instance_id`, then aggregated (cluster mode).
 
 ### Time-series queries

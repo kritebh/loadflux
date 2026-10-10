@@ -5,7 +5,7 @@ export default defineConfig({
   format: ["cjs", "esm"],
   dts: true,
   clean: true,
-  sourcemap: true,
+  sourcemap: process.env.SOURCEMAP === "1",
   external: ["better-sqlite3", "mongodb"],
   outDir: "dist",
 });

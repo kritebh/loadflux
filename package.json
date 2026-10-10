@@ -22,9 +22,10 @@
     "dist-ui"
   ],
   "scripts": {
-    "build": "npm run build:server && npm run build:ui",
+    "build": "node scripts/build.mjs",
     "build:server": "tsup",
     "build:ui": "vite build",
+    "build:analyze": "vite build --mode analyze",
     "dev": "tsup --watch",
     "dev:ui": "vite dev",
     "test": "vitest run",
@@ -88,6 +89,7 @@
     "react-chartjs-2": "^5.3.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.5.0",
+    "rollup-plugin-visualizer": "^6.0.11",
     "tailwindcss": "^3.4.17",
     "tsup": "^8.4.0",
     "typescript": "^5.8.3",

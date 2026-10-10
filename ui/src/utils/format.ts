@@ -57,3 +57,30 @@ export function formatUptime(
   }
   return showSeconds ? `${m}m ${s}s` : `${m}m`;
 }
+
+/**
+ * Subtitle for lifetime counters (Total Requests / Error Rate). These counters
+ * are never reduced by retention cleanup, so retention is deliberately not
+ * mentioned here.
+ */
+export function formatLifetimeMetricsSubtitle(
+  monitoringSinceMs: number | null,
+  oldestEndpointMetricMs?: number | null,
+): string {
+  const sinceMs = monitoringSinceMs ?? oldestEndpointMetricMs;
+  if (sinceMs == null) {
+    return "Lifetime (no history yet)";
+  }
+  const since = new Date(sinceMs).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  return `Lifetime · since ${since}`;
+}
+
+/** Requests/sec with 2 decimals; tiny non-zero rates show as "<0.01" rather than "0.00". */
+export function formatRate(rps: number): string {
+  if (rps > 0 && rps < 0.01) return "<0.01";
+  return rps.toFixed(2);
+}

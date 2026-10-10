@@ -122,6 +122,111 @@ describe("SQLiteAdapter", () => {
     expect(rows[0].p95_duration).toBe(180);
   });
 
+  it("returns oldest endpoint metric timestamp", async () => {
+    expect(await db.getOldestEndpointMetricTimestamp()).toBeNull();
+
+    const older = Date.now() - 60_000;
+    const newer = Date.now();
+    db.insertEndpointMetricsBatch([
+      {
+        timestamp: newer,
+        method: "GET",
+        path: "/new",
+        request_count: 1,
+        error_count: 0,
+        total_duration: 10,
+        min_duration: 10,
+        max_duration: 10,
+        avg_duration: 10,
+        p50_duration: 10,
+        p90_duration: 10,
+        p95_duration: 10,
+        p99_duration: 10,
+        total_res_bytes: 0,
+        status_2xx: 1,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+      {
+        timestamp: older,
+        method: "GET",
+        path: "/old",
+        request_count: 1,
+        error_count: 0,
+        total_duration: 10,
+        min_duration: 10,
+        max_duration: 10,
+        avg_duration: 10,
+        p50_duration: 10,
+        p90_duration: 10,
+        p95_duration: 10,
+        p99_duration: 10,
+        total_res_bytes: 0,
+        status_2xx: 1,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+    ]);
+
+    expect(await db.getOldestEndpointMetricTimestamp()).toBe(older);
+  });
+
+  it("sums endpoint request totals in a range", async () => {
+    const t1 = Date.now() - 10_000;
+    const t2 = Date.now();
+    db.insertEndpointMetricsBatch([
+      {
+        timestamp: t1,
+        method: "GET",
+        path: "/a",
+        request_count: 100,
+        error_count: 0,
+        total_duration: 10,
+        min_duration: 1,
+        max_duration: 1,
+        avg_duration: 1,
+        p50_duration: 1,
+        p90_duration: 1,
+        p95_duration: 1,
+        p99_duration: 1,
+        total_res_bytes: 0,
+        status_2xx: 100,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+      {
+        timestamp: t2,
+        method: "GET",
+        path: "/b",
+        request_count: 50,
+        error_count: 0,
+        total_duration: 10,
+        min_duration: 1,
+        max_duration: 1,
+        avg_duration: 1,
+        p50_duration: 1,
+        p90_duration: 1,
+        p95_duration: 1,
+        p99_duration: 1,
+        total_res_bytes: 0,
+        status_2xx: 50,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+    ]);
+
+    const total = await db.getEndpointRequestTotal({
+      from: Date.now() - 60_000,
+      to: Date.now() + 1000,
+    });
+    expect(total).toBe(150);
+    expect(await db.getMetricsMonitoringSinceMs()).toBe(t1);
+  });
+
   it("inserts and queries errors", async () => {
     const now = Date.now();
     db.insertError({
@@ -432,6 +537,28 @@ describe("SQLiteAdapter", () => {
     expect(overview.error_rate).toBe(10);
     expect(overview.p95_duration).toBe(90);
     expect(overview.p99_duration).toBe(98);
+  });
+
+  it("cluster-aggregated system series sums memory capacity with usage", async () => {
+    const now = Date.now();
+    for (const instance_id of ["node-a", "node-b", "node-c"]) {
+      db.insertSystemMetrics({
+        timestamp: now, instance_id, cpu_percent: 30,
+        mem_total: 8_000, mem_used: 7_900, mem_percent: 98.75,
+        disk_total: null, disk_used: null, disk_percent: null, net_rx_bytes: 0, net_tx_bytes: 0,
+      });
+    }
+
+    const rows = await db.getSystemMetrics(
+      { from: now - 1000, to: now + 1000 },
+      undefined,
+      { clusterAggregate: true },
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].mem_used).toBe(23_700);
+    expect(rows[0].mem_total).toBe(24_000);
+    expect(rows[0].mem_used).toBeLessThanOrEqual(rows[0].mem_total);
+    expect(rows[0].mem_percent).toBeCloseTo(98.75, 2);
   });
 
   it("deletes data older than cutoff", async () => {

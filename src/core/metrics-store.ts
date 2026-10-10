@@ -23,6 +23,7 @@ const SNAPSHOT_DB_CACHE_MS = 8000;
 const SNAPSHOT_LIVE_CACHE_MS = 5000;
 const SNAPSHOT_WARM_INTERVAL_MS = 5000;
 const CLUSTER_INSTANCE_LOOKBACK_MS = 300_000;
+const DAY_MS = 86_400_000;
 
 interface SnapshotDbCache {
   fetchedAt: number;
@@ -32,6 +33,10 @@ interface SnapshotDbCache {
   status: StatusDistribution;
   overview: Pick<OverviewMetrics, "avg_duration" | "p95_duration" | "p99_duration">;
   lifetime: LifetimeTotals;
+  oldestEndpointMetricMs: number | null;
+  monitoringSinceMs: number | null;
+  retentionDays: number;
+  dailyRps: number;
 }
 
 interface SnapshotLiveCache {
@@ -64,6 +69,8 @@ export class MetricsStore {
   private snapshotDbCache: SnapshotDbCache | null = null;
   private snapshotLiveCache: SnapshotLiveCache | null = null;
   private readonly instanceId: string;
+  private cachedRetentionDays: number | null = null;
+  private sseClientCount = 0;
 
   constructor(
     private db: DatabaseAdapter,
@@ -108,6 +115,7 @@ export class MetricsStore {
     this.systemTimer.unref();
 
     const warmSnapshotCache = () => {
+      if (this.sseClientCount === 0) return;
       const now = Date.now();
       const hourRange = { from: now - 3_600_000, to: now };
       void this.getSnapshotDbData(hourRange).catch((err) => {
@@ -119,7 +127,9 @@ export class MetricsStore {
         });
       }
     };
-    warmSnapshotCache();
+    if (this.sseClientCount > 0) {
+      warmSnapshotCache();
+    }
     this.snapshotWarmTimer = setInterval(warmSnapshotCache, SNAPSHOT_WARM_INTERVAL_MS);
     this.snapshotWarmTimer.unref();
   }
@@ -135,6 +145,17 @@ export class MetricsStore {
     }
     stopProcessMonitoring();
     this.aggregator.stop();
+  }
+
+  /** Called by the API when SSE clients connect or disconnect. */
+  setSseClientCount(count: number): void {
+    this.sseClientCount = Math.max(0, count);
+  }
+
+  /** Invalidate cached retention after settings change. */
+  invalidateRetentionDaysCache(): void {
+    this.cachedRetentionDays = null;
+    this.snapshotDbCache = null;
   }
 
   private advanceRequestBuckets(now: number): void {
@@ -198,6 +219,22 @@ export class MetricsStore {
     };
   }
 
+  private async resolveRetentionDays(): Promise<number> {
+    if (this.cachedRetentionDays != null) {
+      return this.cachedRetentionDays;
+    }
+    const raw =
+      (await this.db.getSetting("retention_days")) ??
+      String(this.config.retention.days);
+    const days = parseInt(raw, 10);
+    const resolved =
+      Number.isFinite(days) && days >= 1
+        ? days
+        : this.config.retention.days;
+    this.cachedRetentionDays = resolved;
+    return resolved;
+  }
+
   private async getSnapshotDbData(hourRange: { from: number; to: number }) {
     const now = Date.now();
     if (
@@ -207,21 +244,33 @@ export class MetricsStore {
       return this.snapshotDbCache;
     }
 
+    const dayRange = { from: now - DAY_MS, to: now };
+
     const [
       topByRequests,
       topByLatency,
       topByErrors,
       status,
       overview,
+      dayRequestTotal,
       lifetime,
+      oldestEndpointMetricMs,
+      monitoringSinceMs,
+      retentionDays,
     ] = await Promise.all([
       this.db.getTopEndpoints("request_count", 5, hourRange),
       this.db.getTopEndpoints("p95_duration", 5, hourRange),
       this.db.getTopEndpoints("error_rate", 5, hourRange),
       this.db.getStatusDistribution(hourRange),
       this.db.getOverview(hourRange),
+      this.db.getEndpointRequestTotal(dayRange),
       this.db.getLifetimeTotals(),
+      this.db.getOldestEndpointMetricTimestamp(),
+      this.db.getMetricsMonitoringSinceMs(),
+      this.resolveRetentionDays(),
     ]);
+
+    const dailyRps = dayRequestTotal / (DAY_MS / 1000);
 
     this.snapshotDbCache = {
       fetchedAt: now,
@@ -235,6 +284,10 @@ export class MetricsStore {
         p99_duration: overview.p99_duration,
       },
       lifetime,
+      oldestEndpointMetricMs,
+      monitoringSinceMs,
+      retentionDays,
+      dailyRps,
     };
     return this.snapshotDbCache;
   }
@@ -305,6 +358,12 @@ export class MetricsStore {
     };
     let overview = { avg_duration: 0, p95_duration: 0, p99_duration: 0 };
     let lifetime: LifetimeTotals = { total_requests: 0, total_errors: 0 };
+    let metricsMeta: DashboardSnapshot["metrics_meta"] = {
+      oldest_endpoint_metric_ms: null,
+      monitoring_since_ms: null,
+      retention_days: this.config.retention.days,
+    };
+    let dailyRps = 0;
 
     try {
       const cached = await this.getSnapshotDbData(hourRange);
@@ -314,6 +373,12 @@ export class MetricsStore {
       status = cached.status;
       overview = cached.overview;
       lifetime = cached.lifetime;
+      dailyRps = cached.dailyRps;
+      metricsMeta = {
+        oldest_endpoint_metric_ms: cached.oldestEndpointMetricMs,
+        monitoring_since_ms: cached.monitoringSinceMs,
+        retention_days: cached.retentionDays,
+      };
     } catch (err) {
       console.error("[LoadFlux] Failed to query snapshot data:", err);
     }
@@ -363,6 +428,7 @@ export class MetricsStore {
         overview: {
           rps: liveOverview.rps,
           rpm: liveOverview.rpm,
+          daily_rps: dailyRps,
           total_requests: totals.total_requests,
           error_rate: totals.error_rate,
           avg_duration: overview.avg_duration,
@@ -384,6 +450,7 @@ export class MetricsStore {
           cluster_instances: clusterInstances,
           cluster_enabled: true,
         },
+        metrics_meta: metricsMeta,
         timestamp: now,
       };
     }
@@ -411,6 +478,7 @@ export class MetricsStore {
       overview: {
         rps,
         rpm,
+        daily_rps: dailyRps,
         total_requests: totals.total_requests,
         error_rate: totals.error_rate,
         avg_duration: overview.avg_duration,
@@ -431,6 +499,7 @@ export class MetricsStore {
         instance_id: this.instanceId,
         cluster_enabled: false,
       },
+      metrics_meta: metricsMeta,
       timestamp: now,
     };
   }

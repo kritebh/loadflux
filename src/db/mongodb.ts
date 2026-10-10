@@ -29,6 +29,7 @@ import {
   LIFETIME_TOTAL_REQUESTS_KEY,
   LIFETIME_TOTAL_ERRORS_KEY,
   LIFETIME_TOTALS_SEEDED_KEY,
+  METRICS_FIRST_SEEN_MS_KEY,
   INSTANCE_BACKFILL_DONE_KEY,
   MAX_INSTANCES_LIST,
   withRpsRpm,
@@ -81,6 +82,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
   private errorCol!: Collection;
   private settingsCol!: Collection;
   private authCol!: Collection;
+  private readonly pendingWrites = new Set<Promise<unknown>>();
 
   constructor(private connectionString: string) {}
 
@@ -112,7 +114,22 @@ export class MongoDBAdapter implements DatabaseAdapter {
     await this.seedLifetimeTotalsIfNeeded();
   }
 
+  /**
+   * Fire-and-forget a write, remembering it so close() can drain it first.
+   * Without this, the aggregator's final flush on SIGTERM was dropped when the
+   * client closed mid-insert (lost metrics on every deploy / scale-in).
+   */
+  private track<T>(promise: Promise<T>, context: string): void {
+    this.pendingWrites.add(promise);
+    void promise.finally(() => this.pendingWrites.delete(promise)).catch(() => {});
+    fireAndForget(promise, context);
+  }
+
   async close(): Promise<void> {
+    // Writes may chain follow-ups (e.g. lifetime counters), so drain until idle.
+    while (this.pendingWrites.size > 0) {
+      await Promise.allSettled([...this.pendingWrites]);
+    }
     await this.client.close();
   }
 
@@ -240,14 +257,14 @@ export class MongoDBAdapter implements DatabaseAdapter {
   // ─── Inserts (fire-and-forget) ──────────────────────────────────────────
 
   insertSystemMetrics(m: SystemMetricRow): void {
-    fireAndForget(
+    this.track(
       this.systemCol.insertOne({ ...m }),
       "MongoDB insertSystemMetrics",
     );
   }
 
   insertProcessMetrics(m: ProcessMetricRow): void {
-    fireAndForget(
+    this.track(
       this.processCol.insertOne({ ...m }),
       "MongoDB insertProcessMetrics",
     );
@@ -255,8 +272,12 @@ export class MongoDBAdapter implements DatabaseAdapter {
 
   insertEndpointMetricsBatch(rows: EndpointMetricRow[]): void {
     if (rows.length === 0) return;
-    fireAndForget(
-      this.endpointCol.insertMany(rows).then(() => {
+    const firstSeenTs = rows.reduce(
+      (min, r) => Math.min(min, r.timestamp),
+      rows[0].timestamp,
+    );
+    this.track(
+      this.endpointCol.insertMany(rows).then(async () => {
         let totalRequests = 0;
         let totalErrors = 0;
         for (const row of rows) {
@@ -264,13 +285,27 @@ export class MongoDBAdapter implements DatabaseAdapter {
           totalErrors += row.error_count;
         }
         this.incrementLifetimeTotals(totalRequests, totalErrors);
+        await this.ensureMetricsFirstSeenMs(firstSeenTs);
       }),
       "MongoDB insertEndpointMetricsBatch",
     );
   }
 
+  private async ensureMetricsFirstSeenMs(timestamp: number): Promise<void> {
+    await this.settingsCol.updateOne(
+      { key: METRICS_FIRST_SEEN_MS_KEY },
+      {
+        $setOnInsert: {
+          key: METRICS_FIRST_SEEN_MS_KEY,
+          value: String(timestamp),
+        },
+      },
+      { upsert: true },
+    );
+  }
+
   insertError(e: ErrorLogRow): void {
-    fireAndForget(
+    this.track(
       this.errorCol.insertOne({ ...e }),
       "MongoDB insertError",
     );
@@ -278,7 +313,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
 
   insertErrorsBatch(errors: ErrorLogRow[]): void {
     if (errors.length === 0) return;
-    fireAndForget(
+    this.track(
       this.errorCol.insertMany(errors),
       "MongoDB insertErrorsBatch",
     );
@@ -349,9 +384,8 @@ export class MongoDBAdapter implements DatabaseAdapter {
               _id: "$_id.bucket",
               timestamp: { $max: "$timestamp" },
               cpu_percent: { $avg: "$cpu_percent" },
-              mem_total: { $avg: "$mem_total" },
+              mem_total: { $sum: "$mem_total" },
               mem_used: { $sum: "$mem_used" },
-              mem_percent: { $avg: "$mem_percent" },
               disk_total: { $avg: "$disk_total" },
               disk_used: { $avg: "$disk_used" },
               disk_percent: { $avg: "$disk_percent" },
@@ -367,6 +401,8 @@ export class MongoDBAdapter implements DatabaseAdapter {
         ...row,
         mem_total: Math.round(row.mem_total),
         mem_used: Math.round(row.mem_used),
+        // Cluster-wide utilisation: summed usage over summed capacity.
+        mem_percent: row.mem_total > 0 ? (row.mem_used / row.mem_total) * 100 : 0,
         disk_total: row.disk_total === null ? null : Math.round(row.disk_total),
         disk_used: row.disk_used === null ? null : Math.round(row.disk_used),
         net_rx_bytes: Math.round(row.net_rx_bytes),
@@ -597,6 +633,36 @@ export class MongoDBAdapter implements DatabaseAdapter {
     };
   }
 
+  async getOldestEndpointMetricTimestamp(): Promise<number | null> {
+    const doc = await this.endpointCol
+      .find({})
+      .sort({ timestamp: 1 })
+      .limit(1)
+      .project({ timestamp: 1, _id: 0 })
+      .next();
+    const ts = doc?.timestamp;
+    return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
+  }
+
+  async getMetricsMonitoringSinceMs(): Promise<number | null> {
+    const doc = await this.settingsCol.findOne({
+      key: METRICS_FIRST_SEEN_MS_KEY,
+    });
+    if (!doc?.value) return null;
+    const ms = parseInt(String(doc.value), 10);
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  async getEndpointRequestTotal(range: TimeRange): Promise<number> {
+    const result = await this.endpointCol
+      .aggregate<{ total: number }>([
+        { $match: { timestamp: { $gte: range.from, $lte: range.to } } },
+        { $group: { _id: null, total: { $sum: "$request_count" } } },
+      ])
+      .toArray();
+    return result[0]?.total ?? 0;
+  }
+
   incrementLifetimeTotals(requests: number, errors: number): void {
     if (requests === 0 && errors === 0) return;
     const ops: Promise<unknown>[] = [];
@@ -630,7 +696,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
         ),
       );
     }
-    fireAndForget(Promise.all(ops), "MongoDB incrementLifetimeTotals");
+    this.track(Promise.all(ops), "MongoDB incrementLifetimeTotals");
   }
 
   async getClusterSystemLive(lookbackMs: number): Promise<SystemMetricRow | null> {
@@ -1055,7 +1121,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
 
   deleteOlderThan(timestamp: number): void {
     const filter = { timestamp: { $lt: timestamp } };
-    fireAndForget(
+    this.track(
       Promise.all([
         this.systemCol.deleteMany(filter),
         this.processCol.deleteMany(filter),
@@ -1074,7 +1140,7 @@ export class MongoDBAdapter implements DatabaseAdapter {
   }
 
   setSetting(key: string, value: string): void {
-    fireAndForget(
+    this.track(
       this.settingsCol.updateOne(
         { key },
         { $set: { key, value } },
@@ -1100,18 +1166,26 @@ export class MongoDBAdapter implements DatabaseAdapter {
   }
 
   createUser(username: string, passwordHash: string): void {
-    fireAndForget(
-      this.authCol.insertOne({
-        username,
-        password_hash: passwordHash,
-        created_at: Date.now(),
-      }),
+    // Upsert so replicas booting at the same time (cluster mode) don't race on
+    // the unique username index and log E11000; an existing user is left as-is.
+    this.track(
+      this.authCol.updateOne(
+        { username },
+        {
+          $setOnInsert: {
+            username,
+            password_hash: passwordHash,
+            created_at: Date.now(),
+          },
+        },
+        { upsert: true },
+      ),
       "MongoDB createUser",
     );
   }
 
   updateUserPassword(username: string, passwordHash: string): void {
-    fireAndForget(
+    this.track(
       this.authCol.updateOne(
         { username },
         { $set: { password_hash: passwordHash } },

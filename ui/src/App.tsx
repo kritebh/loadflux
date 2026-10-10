@@ -1,42 +1,35 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  ArcElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler,
-} from "chart.js";
 import { ThemeProvider, useTheme } from "./hooks/useTheme";
 import { useSSEConnectionProvider, SSEConnectionContext } from "./hooks/useSSE";
 import { checkAuthStatus, getAppBasePath } from "./api/client";
 import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
-import { System } from "./pages/System";
-import { Endpoints } from "./pages/Endpoints";
-import { AppMetrics } from "./pages/AppMetrics";
-import { Errors } from "./pages/Errors";
-import { Settings } from "./pages/Settings";
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  BarElement,
-  ArcElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler,
+const System = lazy(() =>
+  import("./pages/System").then((m) => ({ default: m.System })),
 );
+const Endpoints = lazy(() =>
+  import("./pages/Endpoints").then((m) => ({ default: m.Endpoints })),
+);
+const AppMetrics = lazy(() =>
+  import("./pages/AppMetrics").then((m) => ({ default: m.AppMetrics })),
+);
+const Errors = lazy(() =>
+  import("./pages/Errors").then((m) => ({ default: m.Errors })),
+);
+const Settings = lazy(() =>
+  import("./pages/Settings").then((m) => ({ default: m.Settings })),
+);
+
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center h-64 text-gray-400">
+      Loading...
+    </div>
+  );
+}
 
 type AuthState = "loading" | "login" | "setup" | "authenticated";
 
@@ -47,24 +40,26 @@ function AuthenticatedApp() {
 
   return (
     <SSEConnectionContext.Provider value={sseContextValue}>
-      <Routes>
-        <Route
-          element={
-            <Layout
-              theme={theme}
-              toggleTheme={toggle}
-            />
-          }
-        >
-          <Route index element={<Dashboard />} />
-          <Route path="system" element={<System />} />
-          <Route path="endpoints" element={<Endpoints />} />
-          <Route path="app-metrics" element={<AppMetrics />} />
-          <Route path="errors" element={<Errors />} />
-          <Route path="settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route
+            element={
+              <Layout
+                theme={theme}
+                toggleTheme={toggle}
+              />
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="system" element={<System />} />
+            <Route path="endpoints" element={<Endpoints />} />
+            <Route path="app-metrics" element={<AppMetrics />} />
+            <Route path="errors" element={<Errors />} />
+            <Route path="settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
     </SSEConnectionContext.Provider>
   );
 }
@@ -100,7 +95,11 @@ function AppContent() {
     return (
       <Login
         authConfigured={authState === "login"}
-        onSuccess={() => setAuthState("authenticated")}
+        onSuccess={() => {
+          const base = getAppBasePath().replace(/\/$/, "") || "";
+          window.history.replaceState(null, "", `${base}/`);
+          setAuthState("authenticated");
+        }}
       />
     );
   }

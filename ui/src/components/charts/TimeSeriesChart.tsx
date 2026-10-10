@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import { Line } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
+import { ensureChartJsRegistered } from "../../chart/setup";
 import { useTheme } from "../../hooks/useTheme";
 import {
   chartLegendColor,
@@ -9,6 +10,8 @@ import {
   chartTooltipOptions,
   chartAxisTitleOptions,
 } from "../../utils/chartTheme";
+
+ensureChartJsRegistered();
 
 interface Dataset {
   label: string;

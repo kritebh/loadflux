@@ -14,10 +14,12 @@ The LoadFlux dashboard is a React application served at your configured path (de
 
 The main page shows a real-time overview:
 
-- **Request rate** — RPS (requests per second) and RPM (requests per minute)
-- **Response time** — Average, P95, and P99 latency
-- **Error rate** — Percentage of 4xx/5xx responses
-- **Status breakdown** — 2xx, 4xx, and 5xx counts
+- **Request rate (live)** — RPS (requests per second) and RPM (requests per minute); rolling in-memory windows on a single instance, or summed from recent `endpoint_metrics` in cluster mode
+- **Daily RPS** — Average requests per second over the **last 24 hours**, computed from stored endpoint metrics (`SUM(request_count) / 86,400`). Refreshes with the snapshot DB cache (~8s), not every SSE tick’s live path
+- **Total requests / error rate** — O(1) **lifetime** counters (not reduced when retention deletes old rows). Subtitles show **lifetime · since** the first flush time; the footer shows the **oldest stored metric** (earliest row still in the DB) alongside the effective **retention**
+- **Response time** — Average, P95, and P99 latency (**last 1 hour** from the DB)
+- **Error rate** — Percentage from lifetime totals (see above)
+- **Status breakdown** — 2xx, 4xx, and 5xx counts (**last 1 hour**)
 - **Top endpoints** — Highest traffic routes (1h window)
 - **Slowest endpoints** — Routes with highest P95 latency (1h window)
 - **Highest error rate** — Routes with the most errors (1h window)

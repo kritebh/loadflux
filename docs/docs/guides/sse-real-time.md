@@ -39,6 +39,7 @@ interface DashboardSnapshot {
   overview: {
     rps: number;            // Live: current second (single) or ~aggregation-window avg (cluster)
     rpm: number;            // Live: last 60 seconds
+    daily_rps: number;      // Avg RPS over last 24h from endpoint_metrics (total / 86400)
     total_requests: number; // Lifetime counter (O(1); not reduced by retention)
     error_rate: number;     // From lifetime totals (errors / requests)
     avg_duration: number;   // Last hour (from DB)
@@ -60,6 +61,11 @@ interface DashboardSnapshot {
     cluster_instances?: number;
     cluster_enabled?: boolean;
   };
+  metrics_meta: {
+    oldest_endpoint_metric_ms: number | null; // MIN(timestamp) in endpoint_metrics (footer)
+    monitoring_since_ms: number | null;     // First flush time (settings; lifetime subtitles)
+    retention_days: number;                 // DB setting or config default
+  };
   timestamp: number;
 }
 ```
@@ -69,9 +75,18 @@ interface DashboardSnapshot {
 | Field | Meaning |
 |-------|---------|
 | `rps` / `rpm` | Live traffic rate (rolling windows; cluster mode sums recent endpoint metrics) |
+| `daily_rps` | **24-hour average RPS**: sum of `request_count` in `endpoint_metrics` for the last 24 hours, divided by 86,400 seconds. Includes all instances in cluster mode. Cached with other snapshot DB queries (~8s TTL). |
 | `total_requests` | O(1) **lifetime** counter (seeded once from existing data, then incremented on each flush; shared in cluster mode; not reduced when retention deletes old rows) |
 | `error_rate` | Derived from lifetime total requests and errors |
 | Latency percentiles | Last-hour DB overview (approximate across instances) |
+
+### `metrics_meta` field meanings
+
+| Field | Meaning |
+|-------|---------|
+| `monitoring_since_ms` | Wall-clock time of the first endpoint metrics flush (stored in settings) |
+| `oldest_endpoint_metric_ms` | Earliest row still in `endpoint_metrics` (bounded by retention) |
+| `retention_days` | Effective retention used for labels and cleanup |
 
 ## Dashboard pages using SSE
 
@@ -98,6 +113,7 @@ The number of active SSE connections is visible in the server info bar on the da
 SSE connections are lightweight:
 
 - Each connection is a standard HTTP response held open
-- The server pushes ~1-2 KB of JSON every 2 seconds per client
+- The server pushes JSON every 2 seconds per client (snapshot size depends on top-endpoint rows and server fields)
+- Snapshot **DB-backed** fields (including `daily_rps`, 1h tops, and `metrics_meta`) are refreshed on a short cache (~8s); the warm timer runs only while at least one SSE client is connected
 - Connections are cleaned up automatically when clients disconnect
 - The SSE interval timer uses `unref()` so it won't prevent Node.js from exiting

@@ -261,6 +261,7 @@ export function createApiHandler(ctx: MiddlewareContext) {
     sseClients.delete(client);
     sseWaitingDrain.delete(client);
     sseDrainSkips.delete(client);
+    metricsStore.setSseClientCount(sseClients.size);
     try {
       if (!client.writableEnded && !client.destroyed) client.destroy();
     } catch {
@@ -443,10 +444,9 @@ export function createApiHandler(ctx: MiddlewareContext) {
           Connection: "keep-alive",
         });
         sseClients.add(res);
+        metricsStore.setSseClientCount(sseClients.size);
         const remove = () => {
-          sseClients.delete(res);
-          sseWaitingDrain.delete(res);
-          sseDrainSkips.delete(res);
+          dropSseClient(res);
         };
         req.on("close", remove);
         req.on("aborted", remove);
@@ -598,6 +598,7 @@ export function createApiHandler(ctx: MiddlewareContext) {
                 );
               }
               db.setSetting("retention_days", String(days));
+              metricsStore.invalidateRetentionDaysCache();
             }
             if (body.slow_threshold !== undefined) {
               const threshold = parseSettingsInt(body.slow_threshold);

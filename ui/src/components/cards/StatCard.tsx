@@ -5,7 +5,7 @@ interface Props {
   value: string | number;
   subtitle?: string;
   icon?: ReactNode;
-  color?: "blue" | "emerald" | "amber" | "red" | "cyan";
+  color?: "blue" | "emerald" | "amber" | "red" | "cyan" | "violet";
 }
 
 const COLOR_MAP = {
@@ -14,6 +14,7 @@ const COLOR_MAP = {
   amber: "bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400",
   red: "bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400",
   cyan: "bg-cyan-50 dark:bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
+  violet: "bg-violet-50 dark:bg-violet-500/10 text-violet-600 dark:text-violet-400",
 };
 
 export const StatCard = memo(function StatCard({ title, value, subtitle, icon, color = "blue" }: Props) {

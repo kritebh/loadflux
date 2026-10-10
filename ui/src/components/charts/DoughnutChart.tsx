@@ -1,11 +1,14 @@
 import { memo, useMemo } from "react";
 import { Doughnut } from "react-chartjs-2";
 import type { ChartOptions } from "chart.js";
+import { ensureChartJsRegistered } from "../../chart/setup";
 import { useTheme } from "../../hooks/useTheme";
 import {
   chartLegendColor,
   chartTooltipOptions,
 } from "../../utils/chartTheme";
+
+ensureChartJsRegistered();
 
 interface Props {
   labels: string[];

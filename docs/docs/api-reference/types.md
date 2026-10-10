@@ -247,6 +247,7 @@ interface DashboardSnapshot {
   overview: {
     rps: number;
     rpm: number;
+    daily_rps: number;
     total_requests: number;
     error_rate: number;
     avg_duration: number;
@@ -267,6 +268,11 @@ interface DashboardSnapshot {
     instance_id?: string;
     cluster_instances?: number;
     cluster_enabled?: boolean;
+  };
+  metrics_meta: {
+    oldest_endpoint_metric_ms: number | null;
+    monitoring_since_ms: number | null;
+    retention_days: number;
   };
   timestamp: number;
 }

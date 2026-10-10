@@ -4,7 +4,7 @@ import { StatCard } from "../components/cards/StatCard";
 import { GaugeChart } from "../components/charts/GaugeChart";
 import { MetricsTable } from "../components/tables/MetricsTable";
 import type { TopEndpointRow } from "../api/client";
-import { formatBytes, formatDuration, formatUptime } from "../utils/format";
+import { formatBytes, formatDuration, formatUptime, formatLifetimeMetricsSubtitle, formatDate, formatRate } from "../utils/format";
 
 export function Dashboard() {
   const { snapshot } = useSSE();
@@ -71,7 +71,8 @@ export function Dashboard() {
         align: "right" as const,
         render: (r: TopEndpointRow) => (
           <span className={r.value > 0 ? "text-red-500" : ""}>
-            {r.value.toFixed(1)}%
+            {/* getTopEndpoints("error_rate") returns a 0–1 fraction */}
+            {(r.value * 100).toFixed(1)}%
           </span>
         ),
       },
@@ -87,14 +88,20 @@ export function Dashboard() {
     );
   }
 
-  const { system, process: proc, overview, endpoints, server } = snapshot;
+  const { system, process: proc, overview, endpoints, server, metrics_meta } =
+    snapshot;
+
+  const lifetimeSubtitle = formatLifetimeMetricsSubtitle(
+    metrics_meta.monitoring_since_ms,
+    metrics_meta.oldest_endpoint_metric_ms,
+  );
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Dashboard</h1>
 
       {/* Live stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <StatCard
           title="Requests / sec"
           value={overview.rps.toFixed(2)}
@@ -118,9 +125,20 @@ export function Dashboard() {
           }
         />
         <StatCard
+          title="Daily RPS"
+          value={formatRate(overview.daily_rps)}
+          subtitle={`Last 24h avg · ${Math.round(overview.daily_rps * 86_400).toLocaleString()} reqs`}
+          color="violet"
+          icon={
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          }
+        />
+        <StatCard
           title="Total Requests"
           value={overview.total_requests.toLocaleString()}
-          subtitle="All retained data"
+          subtitle={lifetimeSubtitle}
           color="emerald"
           icon={
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -131,7 +149,7 @@ export function Dashboard() {
         <StatCard
           title="Error Rate"
           value={`${overview.error_rate.toFixed(2)}%`}
-          subtitle="All retained data"
+          subtitle={lifetimeSubtitle}
           color={overview.error_rate > 5 ? "red" : overview.error_rate > 1 ? "amber" : "emerald"}
           icon={
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -302,6 +320,17 @@ export function Dashboard() {
             <span className="text-gray-400 dark:text-gray-500">SSE (this instance)</span>{" "}
             <span className="font-medium text-gray-700 dark:text-gray-300">{server.sse_connections}</span>
           </span>
+          {metrics_meta.oldest_endpoint_metric_ms != null && (
+            <span>
+              <span className="text-gray-400 dark:text-gray-500">Oldest stored metric</span>{" "}
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                {formatDate(metrics_meta.oldest_endpoint_metric_ms)}
+              </span>{" "}
+              <span className="text-gray-400 dark:text-gray-500">
+                ({metrics_meta.retention_days}d retention)
+              </span>
+            </span>
+          )}
         </div>
       </div>
     </div>

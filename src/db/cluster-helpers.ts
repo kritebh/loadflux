@@ -28,7 +28,9 @@ export function aggregateSystemRows(rows: SystemMetricRow[]): SystemMetricRow {
   for (const row of rows) {
     cpuSum += row.cpu_percent;
     memUsed += row.mem_used;
-    memTotal = Math.max(memTotal, row.mem_total);
+    // Sum capacity alongside usage: used/total is then cluster-wide utilisation
+    // (summing used against a single instance's total exceeded 100%).
+    memTotal += row.mem_total;
     netRx += row.net_rx_bytes;
     netTx += row.net_tx_bytes;
     latestTs = Math.max(latestTs, row.timestamp);

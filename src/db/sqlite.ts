@@ -29,6 +29,7 @@ import {
   LIFETIME_TOTAL_REQUESTS_KEY,
   LIFETIME_TOTAL_ERRORS_KEY,
   LIFETIME_TOTALS_SEEDED_KEY,
+  METRICS_FIRST_SEEN_MS_KEY,
   INSTANCE_BACKFILL_DONE_KEY,
   MAX_INSTANCES_LIST,
   withRpsRpm,
@@ -469,7 +470,28 @@ export class SQLiteAdapter implements DatabaseAdapter {
       getErrorsPaginated: this.db.prepare(
         `SELECT * FROM ${TABLE_ERROR_LOG} WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
       ),
+      sumEndpointRequests: this.db.prepare(
+        `SELECT COALESCE(SUM(request_count), 0) as total FROM ${TABLE_ENDPOINT_METRICS} WHERE timestamp BETWEEN ? AND ?`,
+      ),
+      oldestEndpointMin: this.db.prepare(
+        `SELECT MIN(timestamp) as oldest FROM ${TABLE_ENDPOINT_METRICS}`,
+      ),
     };
+  }
+
+  private ensureMetricsFirstSeenMs(timestamp: number): void {
+    try {
+      const existing = this.stmts.getSetting.get(METRICS_FIRST_SEEN_MS_KEY) as
+        | { value: string }
+        | undefined;
+      if (existing) return;
+      this.stmts.setSetting.run(
+        METRICS_FIRST_SEEN_MS_KEY,
+        String(timestamp),
+      );
+    } catch (err) {
+      logDbError("SQLite ensureMetricsFirstSeenMs", err);
+    }
   }
 
   // ─── Inserts ────────────────────────────────────────────────────────────
@@ -559,6 +581,9 @@ export class SQLiteAdapter implements DatabaseAdapter {
         }
       });
       batchInsert(rows);
+      this.ensureMetricsFirstSeenMs(
+        rows.reduce((min, r) => Math.min(min, r.timestamp), rows[0].timestamp),
+      );
     } catch (err) {
       logDbError("SQLite insertEndpointMetricsBatch", err);
     }
@@ -661,9 +686,12 @@ export class SQLiteAdapter implements DatabaseAdapter {
         SELECT
           MAX(timestamp) as timestamp,
           AVG(cpu_percent) as cpu_percent,
-          AVG(mem_total) as mem_total,
+          SUM(mem_total) as mem_total,
           SUM(mem_used) as mem_used,
-          AVG(mem_percent) as mem_percent,
+          CASE WHEN SUM(mem_total) > 0
+            THEN SUM(mem_used) * 100.0 / SUM(mem_total)
+            ELSE 0
+          END as mem_percent,
           AVG(disk_total) as disk_total,
           AVG(disk_used) as disk_used,
           AVG(disk_percent) as disk_percent,
@@ -929,6 +957,46 @@ export class SQLiteAdapter implements DatabaseAdapter {
     } catch (err) {
       logDbError("SQLite getLifetimeTotals", err);
       return { total_requests: 0, total_errors: 0 };
+    }
+  }
+
+  async getOldestEndpointMetricTimestamp(): Promise<number | null> {
+    try {
+      const row = this.stmts.oldestEndpointMin.get() as {
+        oldest: number | null;
+      };
+      const oldest = row?.oldest;
+      return oldest != null && Number.isFinite(oldest) ? oldest : null;
+    } catch (err) {
+      logDbError("SQLite getOldestEndpointMetricTimestamp", err);
+      return null;
+    }
+  }
+
+  async getMetricsMonitoringSinceMs(): Promise<number | null> {
+    try {
+      const row = this.stmts.getSetting.get(METRICS_FIRST_SEEN_MS_KEY) as
+        | { value: string }
+        | undefined;
+      if (!row?.value) return null;
+      const ms = parseInt(row.value, 10);
+      return Number.isFinite(ms) ? ms : null;
+    } catch (err) {
+      logDbError("SQLite getMetricsMonitoringSinceMs", err);
+      return null;
+    }
+  }
+
+  async getEndpointRequestTotal(range: TimeRange): Promise<number> {
+    try {
+      const row = this.stmts.sumEndpointRequests.get(
+        range.from,
+        range.to,
+      ) as { total: number };
+      return row?.total ?? 0;
+    } catch (err) {
+      logDbError("SQLite getEndpointRequestTotal", err);
+      return 0;
     }
   }
 

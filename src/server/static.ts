@@ -35,6 +35,8 @@ function getDistUiDir(): string {
 /** @internal Resets cached dist-ui path (for unit tests). */
 export function resetDistUiDirCache(): void {
   _distUiDir = null;
+  // A different dist-ui location invalidates any buffers cached under the old one.
+  resetAssetCache();
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -48,6 +50,43 @@ const MIME_TYPES: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
 };
+
+// dist-ui assets are content-hashed by Vite and served `immutable`, so their
+// bytes never change for a given path. Cache the buffer on first read to keep
+// blocking disk I/O off the request hot path (many tabs / cold browser caches
+// otherwise re-hit the disk synchronously every request).
+interface CachedAsset {
+  content: Buffer;
+  mimeType: string;
+}
+const assetCache = new Map<string, CachedAsset>();
+
+/** @internal Clears the served-asset buffer cache (for unit tests). */
+export function resetAssetCache(): void {
+  assetCache.clear();
+}
+
+/**
+ * Reads an asset from disk once and caches its buffer. Returns null if the file
+ * does not exist. A single `readFileSync` in a try/catch replaces the previous
+ * `existsSync` + `readFileSync` pair (one syscall instead of two on a miss).
+ */
+function readAssetCached(filePath: string, ext: string): CachedAsset | null {
+  const cached = assetCache.get(filePath);
+  if (cached) return cached;
+  let content: Buffer;
+  try {
+    content = fs.readFileSync(filePath);
+  } catch {
+    return null;
+  }
+  const entry: CachedAsset = {
+    content,
+    mimeType: MIME_TYPES[ext] || "application/octet-stream",
+  };
+  assetCache.set(filePath, entry);
+  return entry;
+}
 
 export function createStaticHandler(basePath: string) {
   // Read and patch index.html once: rewrite relative asset paths to absolute
@@ -96,19 +135,18 @@ export function createStaticHandler(basePath: string) {
 
     if (ext) {
       // Has a file extension — serve the actual file or 404
-      if (!fs.existsSync(filePath)) {
+      const asset = readAssetCached(filePath, ext);
+      if (!asset) {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Not found");
         return;
       }
 
-      const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-      const content = fs.readFileSync(filePath);
       res.writeHead(200, {
-        "Content-Type": mimeType,
+        "Content-Type": asset.mimeType,
         "Cache-Control": "public, max-age=31536000, immutable",
       });
-      res.end(content);
+      res.end(asset.content);
       return;
     }
 
@@ -149,16 +187,14 @@ export function tryServeAsset(
   // Prevent directory traversal
   if (!filePath.startsWith(distUiDir + path.sep) && filePath !== distUiDir) return false;
 
-  if (!fs.existsSync(filePath)) return false;
-
   const ext = path.extname(filePath);
-  const mimeType = MIME_TYPES[ext] || "application/octet-stream";
-  const content = fs.readFileSync(filePath);
+  const asset = readAssetCached(filePath, ext);
+  if (!asset) return false;
 
   res.writeHead(200, {
-    "Content-Type": mimeType,
+    "Content-Type": asset.mimeType,
     "Cache-Control": "public, max-age=31536000, immutable",
   });
-  res.end(content);
+  res.end(asset.content);
   return true;
 }

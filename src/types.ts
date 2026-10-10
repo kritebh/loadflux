@@ -275,6 +275,12 @@ export interface DatabaseAdapter {
   getLiveOverview(now: number): Promise<LiveOverviewMetrics>;
   /** O(1) lifetime counters for the live dashboard (not reduced by retention). */
   getLifetimeTotals(): Promise<LifetimeTotals>;
+  /** Earliest endpoint_metrics row timestamp, or null if none. */
+  getOldestEndpointMetricTimestamp(): Promise<number | null>;
+  /** First metrics flush time from settings, or null if not recorded yet. */
+  getMetricsMonitoringSinceMs(): Promise<number | null>;
+  /** Sum of request_count in endpoint_metrics for the time range. */
+  getEndpointRequestTotal(range: TimeRange): Promise<number>;
   /** Increment lifetime counters after an endpoint metrics flush. */
   incrementLifetimeTotals(requests: number, errors: number): void;
   getClusterSystemLive(lookbackMs: number): Promise<SystemMetricRow | null>;
@@ -380,6 +386,8 @@ export interface DashboardSnapshot {
   overview: {
     rps: number;
     rpm: number;
+    /** Average requests/sec over the last 24 hours (from stored endpoint metrics). */
+    daily_rps: number;
     total_requests: number;
     error_rate: number;
     avg_duration: number;
@@ -400,6 +408,11 @@ export interface DashboardSnapshot {
     instance_id?: string;
     cluster_instances?: number;
     cluster_enabled?: boolean;
+  };
+  metrics_meta: {
+    oldest_endpoint_metric_ms: number | null;
+    monitoring_since_ms: number | null;
+    retention_days: number;
   };
   timestamp: number;
 }

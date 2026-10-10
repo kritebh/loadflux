@@ -85,4 +85,67 @@ describe("MetricsStore", () => {
 
     vi.useRealTimers();
   });
+
+  it("includes metrics_meta in snapshot from stored endpoint rows", async () => {
+    const oldest = Date.now() - 120_000;
+    db.insertEndpointMetricsBatch([
+      {
+        timestamp: oldest,
+        method: "GET",
+        path: "/api/history",
+        request_count: 10,
+        error_count: 1,
+        total_duration: 100,
+        min_duration: 5,
+        max_duration: 20,
+        avg_duration: 10,
+        p50_duration: 10,
+        p90_duration: 15,
+        p95_duration: 18,
+        p99_duration: 19,
+        total_res_bytes: 1000,
+        status_2xx: 9,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 1,
+      },
+    ]);
+    await db.setSetting("retention_days", "45");
+
+    const snapshot = await store.getCurrentSnapshot();
+    expect(snapshot.metrics_meta.oldest_endpoint_metric_ms).toBe(oldest);
+    expect(snapshot.metrics_meta.monitoring_since_ms).toBe(oldest);
+    expect(snapshot.metrics_meta.retention_days).toBe(45);
+  });
+
+  it("computes daily_rps from endpoint metrics in the last 24 hours", async () => {
+    const now = Date.now();
+    const dayMs = 86_400_000;
+    db.insertEndpointMetricsBatch([
+      {
+        timestamp: now - 60_000,
+        method: "GET",
+        path: "/api/daily",
+        request_count: 86_400,
+        error_count: 0,
+        total_duration: 1000,
+        min_duration: 1,
+        max_duration: 10,
+        avg_duration: 5,
+        p50_duration: 5,
+        p90_duration: 8,
+        p95_duration: 9,
+        p99_duration: 10,
+        total_res_bytes: 0,
+        status_2xx: 86_400,
+        status_3xx: 0,
+        status_4xx: 0,
+        status_5xx: 0,
+      },
+    ]);
+
+    const snapshot = await store.getCurrentSnapshot();
+    const expected = 86_400 / (dayMs / 1000);
+    expect(snapshot.overview.daily_rps).toBeCloseTo(expected, 5);
+  });
 });

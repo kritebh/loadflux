@@ -54,6 +54,7 @@ App Runner does **not** provide session affinity. Cluster mode fixes dashboard f
 | Metric | Single instance | Cluster mode |
 |--------|-----------------|--------------|
 | Live RPS / RPM | In-memory on serving container | Sum of endpoint metrics (last 60s / aggregation window) |
+| Daily RPS (24h avg) | Sum of `endpoint_metrics` in last 24h ÷ 86,400 | Same — all instances in DB |
 | Total Requests / Error Rate | O(1) lifetime counters (seeded once, then incremented on flush; not reduced by retention) | Same counters — cluster-wide |
 | Live CPU / RAM / heap | Local container | Aggregated across all instances |
 | Historical endpoints / errors | DB (already merged) | Same |

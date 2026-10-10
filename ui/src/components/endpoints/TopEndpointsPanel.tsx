@@ -34,8 +34,15 @@ export const TopEndpointsPanel = memo(function TopEndpointsPanel({
     () => top.map((t) => `${t.method} ${t.path}`),
     [top],
   );
-  const barValues = useMemo(() => top.map((t) => t.value), [top]);
-  const chartLabel = useMemo(() => topMetric.replace(/_/g, " "), [topMetric]);
+  // error_rate comes back as a 0–1 fraction; chart it as a percentage.
+  const barValues = useMemo(
+    () => top.map((t) => (topMetric === "error_rate" ? t.value * 100 : t.value)),
+    [top, topMetric],
+  );
+  const chartLabel = useMemo(
+    () => (topMetric === "error_rate" ? "error rate (%)" : topMetric.replace(/_/g, " ")),
+    [topMetric],
+  );
   const chartHeight = useMemo(() => Math.max(200, top.length * 35), [top.length]);
 
   return (

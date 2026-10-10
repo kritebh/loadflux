@@ -41,25 +41,50 @@ export function useSSEConnectionProvider(): { connected: boolean } {
 
   useEffect(() => {
     const url = `${getApiBase()}/sse`;
-    const es = new EventSource(url, { withCredentials: true });
-    esRef.current = es;
 
-    es.onopen = () => setConnected(true);
+    const open = () => {
+      if (esRef.current) return;
+      const es = new EventSource(url, { withCredentials: true });
+      esRef.current = es;
 
-    es.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as DashboardSnapshot;
-        setSnapshotStore(data);
-      } catch {}
+      es.onopen = () => setConnected(true);
+
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as DashboardSnapshot;
+          setSnapshotStore(data);
+        } catch {}
+      };
+
+      es.onerror = () => {
+        setConnected(false);
+      };
     };
 
-    es.onerror = () => {
+    const close = () => {
+      if (!esRef.current) return;
+      esRef.current.close();
+      esRef.current = null;
       setConnected(false);
     };
 
+    // Pause the stream while the tab is backgrounded: an open EventSource keeps
+    // the server computing + pushing a full snapshot every 2s and the client
+    // parsing it, none of which the user can see. Reopen on return to foreground.
+    const onVisibility = () => {
+      if (document.hidden) {
+        close();
+      } else {
+        open();
+      }
+    };
+
+    if (!document.hidden) open();
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
-      es.close();
-      esRef.current = null;
+      document.removeEventListener("visibilitychange", onVisibility);
+      close();
       snapshotStore = null;
       for (const listener of snapshotListeners) {
         listener();

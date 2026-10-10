@@ -24,6 +24,9 @@ export const LIFETIME_TOTAL_REQUESTS_KEY = "lifetime_total_requests";
 export const LIFETIME_TOTAL_ERRORS_KEY = "lifetime_total_errors";
 export const LIFETIME_TOTALS_SEEDED_KEY = "lifetime_totals_seeded";
 
+/** Wall-clock time of the first endpoint_metrics flush (O(1) “monitoring since”). */
+export const METRICS_FIRST_SEEN_MS_KEY = "metrics_first_seen_ms";
+
 /** Set once the legacy-instance_id backfill has run, so it is not re-run every boot. */
 export const INSTANCE_BACKFILL_DONE_KEY = "instance_backfill_done";
 
